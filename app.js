@@ -176,6 +176,7 @@ function showView(v){
     requestAnimationFrame(() => scrollToBottom(false));
     if (innerWidth >= 960) input.focus();
   }
+  refreshConnHelp();
 }
 function showError(msg){ $('#error-text').textContent = msg; showView('error'); }
 
@@ -219,6 +220,7 @@ function refreshStatus(){
     ? (S.netState === 'signal' ? 'Reconectando ao servidor de sinal…' : 'Aguardando a outra pessoa entrar…') : txt;
   latency.hidden = !on;
   updateSendBtn();
+  refreshConnHelp();
 }
 function setStatus(k){ S.netState = k; refreshStatus(); }
 function renderLatency(){
@@ -842,17 +844,27 @@ function drawQRs(){
     } catch { const w = c.closest('.qr-card,.qr-wrap'); if (w) w.hidden = true; }
   });
 }
-async function copyLink(){
+async function copyLink(auto = false){
   const l = inviteLink();
-  try { await navigator.clipboard.writeText(l); toast('ok', 'Link copiado. Envie para a outra pessoa.'); }
+  let ok = false;
+  try { await navigator.clipboard.writeText(l); ok = true; }
   catch {
     const t = document.createElement('textarea');
     t.value = l; t.style.position = 'fixed'; t.style.opacity = '0';
     document.body.appendChild(t); t.select();
-    try { document.execCommand('copy'); toast('ok', 'Link copiado.'); }
-    catch { toast('error', 'Não foi possível copiar — selecione o link manualmente.'); }
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
     t.remove();
   }
+  const note = $('#auto-copy-note');
+  if (note){
+    note.classList.toggle('manual', !ok);
+    note.innerHTML = ok
+      ? ICONS.check1 + '<span>Link copiado automaticamente. Cole no WhatsApp, SMS ou onde preferir.</span>'
+      : ICONS.alert + '<span>Toque em <b>Copiar</b> e envie o link para a outra pessoa.</span>';
+  }
+  if (ok) toast('ok', auto ? 'Link copiado automaticamente. Envie para a outra pessoa.' : 'Link copiado.');
+  else if (!auto) toast('error', 'Não foi possível copiar — selecione o link manualmente.');
+  return ok;
 }
 async function shareLink(){
   if (navigator.share) {
@@ -860,6 +872,72 @@ async function shareLink(){
     catch (e) { if (e && e.name === 'AbortError') return; }
   }
   copyLink();
+}
+
+/* ───────── compartilhamento fácil / entrada por convite ───────── */
+function shareTo(kind){
+  const l = inviteLink();
+  const text = 'Entre na minha conversa privada no Névoa (anônima, criptografada e sem cadastro):';
+  const url = kind === 'whatsapp'
+    ? 'https://wa.me/?text=' + encodeURIComponent(text + '\n' + l)
+    : 'https://t.me/share/url?url=' + encodeURIComponent(l) + '&text=' + encodeURIComponent(text);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  toast('info', 'Compartilhamento aberto. Envie o link para uma pessoa.');
+}
+function extractInvite(text){
+  const t = String(text || '').trim();
+  const candidates = [];
+  const um = t.match(/https?:\/\/[^\s<>"']+/);
+  if (um) candidates.push(um[0]);
+  candidates.push(t);
+  for (let c of candidates){
+    c = c.replace(/[.,;:!?)\]}'"]+$/, '');
+    const i = c.indexOf('#');
+    const hash = (i >= 0 ? c.slice(i + 1) : c).replace(/^[?#]/, '');
+    const p = new URLSearchParams(hash);
+    const r = p.get('r'), k = p.get('k');
+    if (validHash({ r, k })) return { r, k };
+  }
+  return null;
+}
+function openJoin(){
+  $('#join-input').value = '';
+  $('#join-error').hidden = true;
+  $('#modal-join').hidden = false;
+  setTimeout(() => $('#join-input').focus(), 50);
+}
+function goJoin(){
+  const inv = extractInvite($('#join-input').value);
+  if (!inv){
+    const e = $('#join-error');
+    e.textContent = 'Link incompleto. Cole o convite inteiro, incluindo tudo depois do #.';
+    e.hidden = false;
+    return;
+  }
+  $('#modal-join').hidden = true;
+  history.replaceState(null, '', location.href.split('#')[0] + '#r=' + inv.r + '&k=' + inv.k);
+  location.reload();
+}
+function refreshConnHelp(){
+  const box = $('#conn-help');
+  if (!box) return;
+  const show = S.view === 'chat' && !S.connected && (S.role === 'guest' || S.wasConnected);
+  box.hidden = !show;
+  if (!show) return;
+  const T = $('#conn-help-title'), P = $('#conn-help-text');
+  if (S.role === 'host'){
+    T.textContent = 'Aguardando a outra pessoa voltar';
+    P.textContent = 'A conexão caiu. Estamos tentando restabelecer automaticamente.';
+  } else if (S.netState === 'host-offline'){
+    T.textContent = 'O anfitrião ainda não está online';
+    P.textContent = 'Peça para a pessoa abrir o site e manter a aba aberta. Tentamos conectar sozinhos.';
+  } else if (S.netState === 'signal'){
+    T.textContent = 'Reconectando ao serviço de encontro';
+    P.textContent = 'Isso costuma levar poucos segundos. Você não precisa fazer nada.';
+  } else {
+    T.textContent = 'Conectando automaticamente…';
+    P.textContent = 'Estamos localizando o outro navegador. Mantenha esta aba aberta.';
+  }
 }
 
 /* ───────── encerrar / limpar ───────── */
@@ -955,6 +1033,7 @@ async function createRoom(){
   renderInvite(); renderMe(); renderPeer();
   showView('waiting'); setStatus('waiting');
   initHost(0);
+  copyLink(true);
 }
 async function joinRoom(h){
   S.role = 'guest'; S.roomId = h.r; S.keyB64 = h.k; S.createdAt = Date.now();
@@ -1018,13 +1097,20 @@ function initReveal(){
   const spy = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting) links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + e.target.id));
   }), { rootMargin: '-40% 0px -55% 0px' });
-  ['como', 'privacidade'].forEach(id => { const s = document.getElementById(id); if (s) spy.observe(s); });
+  ['como', 'privacidade', 'usar'].forEach(id => { const s = document.getElementById(id); if (s) spy.observe(s); });
 }
 
 /* ───────── eventos ───────── */
 function wireEvents(){
   $('#btn-create').addEventListener('click', createRoom);
   $('#btn-create-2').addEventListener('click', createRoom);
+  $('#btn-join-paste').addEventListener('click', openJoin);
+  $('#btn-whatsapp').addEventListener('click', () => shareTo('whatsapp'));
+  $('#btn-telegram').addEventListener('click', () => shareTo('telegram'));
+  $('#btn-retry-now').addEventListener('click', () => {
+    if (S.role === 'guest'){ toast('info', 'Tentando conectar agora…'); scheduleRetry(0); }
+    else if (S.peer && !S.peer.destroyed && S.peer.disconnected){ try { S.peer.reconnect(); } catch {} }
+  });
   $('#btn-sound').addEventListener('click', toggleSound);
   $('#btn-copy-link').addEventListener('click', copyLink);
   $('#btn-copy-side').addEventListener('click', copyLink);
@@ -1113,6 +1199,11 @@ function wireEvents(){
   $('#name-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
   modalName.addEventListener('click', e => { if (e.target === modalName) modalName.hidden = true; });
 
+  $('#btn-join-cancel').addEventListener('click', () => { $('#modal-join').hidden = true; });
+  $('#btn-join-go').addEventListener('click', goJoin);
+  $('#modal-join').addEventListener('click', e => { if (e.target === $('#modal-join')) $('#modal-join').hidden = true; });
+  $('#join-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); goJoin(); } });
+  $('#join-input').addEventListener('paste', () => setTimeout(() => { if (extractInvite($('#join-input').value)) goJoin(); }, 120));
   $('#lightbox-close').addEventListener('click', closeLightbox);
   lightbox.addEventListener('click', e => { if (e.target === lightbox) closeLightbox(); });
 
@@ -1121,6 +1212,7 @@ function wireEvents(){
     if (!lightbox.hidden) closeLightbox();
     else if (!modalConfirm.hidden) { modalConfirm.hidden = true; confirmCb = null; }
     else if (!modalName.hidden) modalName.hidden = true;
+    else if (!$('#modal-join').hidden) $('#modal-join').hidden = true;
     else if (!emojiPop.hidden) emojiPop.hidden = true;
     else closeSidebar();
   });

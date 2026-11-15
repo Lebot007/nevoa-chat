@@ -1,80 +1,61 @@
 # Névoa — chat anônimo e efêmero
 
-Conversa privada entre **duas pessoas**, direto de navegador para navegador.
-Sem conta, sem banco de dados, sem histórico em servidores. **Encerrou, evaporou.**
+Conversa privada entre duas pessoas, direto de navegador para navegador.
+Sem conta, sem banco de dados, sem histórico em servidores. Encerrou, evaporou.
 
-**Site:** https://lebot007.github.io/nevoa-chat/
+## Use agora (sem instalar nada)
+
+Site: https://lebot007.github.io/nevoa-chat/
+
+1. Abra o site acima.
+2. Clique em "Criar conversa privada" — o link é copiado automaticamente.
+3. Envie o link pelo WhatsApp ou Telegram (botões prontos na tela), ou copie.
+4. A outra pessoa abre o link e a conversa conecta sozinha.
+5. Mantenha a aba aberta enquanto conversam. "Encerrar e apagar tudo" remove mensagens, arquivos e chave dos dois lados.
+
+Não é preciso rodar servidor local, abrir terminal, configurar rede ou instalar qualquer coisa. As instruções de localhost abaixo são apenas para desenvolvedores que queiram editar o código.
+
+Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole o link completo — a entrada é automática.
 
 ## Como funciona
 
-1. O usuário 1 cria a sala. Um link único é gerado com a chave de criptografia
-   embutida no fragmento (`#`) — fragmentos **nunca** são enviados a servidores.
-2. O usuário 2 abre o link. Os navegadores se encontram via broker público de
-   sinalização (PeerJS Cloud) e abrem um **DataChannel WebRTC P2P**.
-3. Todo o tráfego é cifrado com **AES-256-GCM** (WebCrypto) antes de sair do
-   navegador, além do DTLS nativo do WebRTC. Nenhuma mensagem passa pelo servidor.
-4. Qualquer um dos dois pode **Encerrar e apagar tudo**: mensagens, arquivos,
-   histórico local e chave são destruídos **nos dois dispositivos**.
+- O usuário 1 cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
+- O usuário 2 abre o link; os navegadores se encontram pelo broker público (PeerJS Cloud) e abrem um canal WebRTC P2P.
+- Mensagens e arquivos são cifrados ponta a ponta antes de sair do navegador. Nenhum servidor guarda conteúdo.
+- Encerrar apaga mensagens, arquivos da RAM, histórico local cifrado e a chave, nos dois dispositivos.
 
 ## Recursos
 
-- Mensagens em tempo real com recibos (enviado / entregue / lido)
-- Indicador de "digitando…", latência ao vivo, sons sintetizados (com mudo)
-- Imagens com preview + lightbox; arquivos de qualquer tipo até **8 MB**,
-  transferidos em blocos cifrados com progresso, cancelamento e reenvio
-- Arrastar e soltar, colar imagem da área de transferência, emojis
-- Apelidos anônimos aleatórios (editáveis), avatares por gradiente
-- Textos persistidos **cifrados** no `localStorage` por até 12 h (retomada após
-  recarregar); arquivos vivem **somente em RAM** e expiram ao recarregar
-- Reconexão automática com backoff; sala estritamente para 2 pessoas
-- QR Code e compartilhamento nativo do link; layout responsivo (drawer mobile)
+- Chat em tempo real com recibos, "digitando…", latência e sons com mudo
+- Imagens com preview e lightbox; arquivos até 8 MB com progresso, cancelamento e reenvio
+- Cópia automática do convite, botões de WhatsApp/Telegram e compartilhamento nativo
+- Entrada por convite colado (auto-join ao colar um link válido)
+- Faixa de conexão em linguagem simples com "Tentar agora" e reconexão automática
+- Apelidos anônimos editáveis; textos cifrados no localStorage por até 12 h; arquivos só em RAM
+- Layout responsivo, QR Code e sala limitada a duas pessoas
 
-## Rodar localmente
-
-Precisa de contexto seguro (localhost ou HTTPS) por causa do WebCrypto:
+## Rodar localmente (apenas desenvolvedores)
 
 ```bash
 python -m http.server 8080
 # ou: npx serve .
 ```
 
-Abra `http://localhost:8080`, crie a sala e envie o link para a outra pessoa.
+Abra http://localhost:8080 para editar e testar o código. Usuários finais usam só o site publicado.
 
-## Publicar no GitHub (1 comando)
+## Publicar / atualizar
 
-Requer Node 18+. Cria o repositório, comita na `main` como **Lebot007** e ativa o
-GitHub Pages:
-
-```bash
-GITHUB_TOKEN=ghp_sua_chave node deploy.mjs          # bash
-```
-
-```powershell
-$env:GITHUB_TOKEN="ghp_sua_chave"; node deploy.mjs  # PowerShell
-```
-
-Use um token classic com escopo `repo`. **Revogue o token depois** em
-https://github.com/settings/tokens.
-
-Alternativa manual:
+O deploy.mjs cria o repositório e publica no GitHub Pages:
 
 ```bash
-git init -b main && git add .
-git -c user.name=Lebot007 -c user.email=Lebot007@users.noreply.github.com \
-  commit -m "feat: Névoa — chat anônimo P2P efêmero"
-git remote add origin https://github.com/Lebot007/nevoa-chat.git
-git push -u origin main
+GITHUB_TOKEN=ghp_sua_chave node deploy.mjs
 ```
 
-## Limites e notas de privacidade
+Use token classic com escopo repo e revogue depois em https://github.com/settings/tokens.
 
-- O broker de sinalização vê os IPs dos participantes (como qualquer WebRTC);
-  ele **não** vê mensagens nem a chave. Em redes restritivas, um relay TURN
-  público pode retransmitir o tráfego — sempre cifrado ponta a ponta.
-- Fechar a aba sem encerrar mantém o histórico cifrado por até 12 h apenas no
-  seu dispositivo. Use **Encerrar e apagar tudo** para destruição imediata.
-- Projeto educativo, sem auditoria formal de segurança. Não use para dados
-  que exijam garantias formais de sigilo.
+## Privacidade
+
+O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. Em redes restritivas um relay TURN público pode retransmitir tráfego, sempre cifrado. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
 
 ## Licença
 

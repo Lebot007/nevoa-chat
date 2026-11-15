@@ -34,6 +34,7 @@
   <nav class="top-links" aria-label="Seções">
     <a href="#como" class="top-link">Como funciona</a>
     <a href="#privacidade" class="top-link">Privacidade</a>
+    <a href="#usar" class="top-link">Sem instalação</a>
   </nav>
   <div class="top-actions">
     <button id="btn-sound" class="icon-btn" aria-label="Ativar ou desativar sons" aria-pressed="true">
@@ -57,8 +58,9 @@
       <div class="cta-row reveal d3">
         <button id="btn-create" class="btn btn-primary btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Criar conversa privada</button>
         <a href="#como" class="btn btn-ghost btn-lg">Como funciona</a>
+        <button id="btn-join-paste" class="btn btn-ghost btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>Tenho um convite</button>
       </div>
-      <p class="hero-note reveal d4">Grátis · Sem instalação · Imagens e arquivos de até 8 MB</p>
+      <p class="hero-note reveal d4">Grátis · Sem instalar nada · Celular e computador · Arquivos até 8 MB</p>
     </div>
     <div class="hero-demo reveal d2" aria-hidden="true">
       <div class="demo-card">
@@ -92,6 +94,17 @@
     </div>
   </section>
 
+  <section id="usar" class="section">
+    <h2 class="section-title reveal">Feito para usuário comum</h2>
+    <p class="section-sub reveal">Ninguém precisa instalar nada, abrir terminal ou configurar rede. É só abrir o site e enviar um link.</p>
+    <div class="faq-grid">
+      <article class="faq-card reveal"><h3>Preciso instalar algo?</h3><p>Não. Funciona direto no navegador, no celular ou no computador. Basta abrir o site publicado.</p></article>
+      <article class="faq-card reveal d1"><h3>Preciso conectar localmente?</h3><p>Não. Instruções de localhost são só para desenvolvedores que editam o código. Quem conversa usa apenas o link do site.</p></article>
+      <article class="faq-card reveal d2"><h3>Funciona fora da minha rede?</h3><p>Sim. Vocês dois só precisam de internet. A conexão é direta entre os navegadores, sem banco de dados guardando mensagens.</p></article>
+      <article class="faq-card reveal d3"><h3>E se a conexão cair?</h3><p>O site tenta reconectar sozinho e mostra o status. Vocês também podem usar “Tentar agora”. Manter a aba aberta ajuda.</p></article>
+    </div>
+  </section>
+
   <div class="final-cta reveal"><button id="btn-create-2" class="btn btn-primary btn-lg">Começar uma conversa</button></div>
   <footer class="footer"><span>Névoa — conversas que não precisam durar.</span><span>MIT © <span id="year">2026</span> Lebot007</span></footer>
 </section>
@@ -102,10 +115,21 @@
     <div class="radar" aria-hidden="true"><i></i><i></i><i></i><div class="radar-core"><svg class="logo" viewBox="0 0 64 64"><rect x="8" y="10" width="38" height="30" rx="11" fill="url(#nvg)"/><path d="M18 40l-7 12 16-12z" fill="url(#nvg)"/><circle cx="50" cy="46" r="3.4" fill="#35E0E6" opacity=".85"/><circle cx="57" cy="40" r="2.5" fill="#35E0E6" opacity=".5"/><circle cx="62" cy="34" r="1.7" fill="#35E0E6" opacity=".3"/></svg></div></div>
     <h2>Sua sala está pronta</h2>
     <p id="wait-status" class="wait-status">Aguardando a outra pessoa entrar…</p>
+    <div class="wait-steps" aria-label="Como usar">
+      <div class="wait-step"><b>1</b><span>Envie o link</span></div>
+      <div class="wait-step"><b>2</b><span>A pessoa abre</span></div>
+      <div class="wait-step"><b>3</b><span>Conversa começa</span></div>
+    </div>
     <div class="invite-card">
       <span class="invite-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>Link de convite</span>
       <div class="invite-row"><code id="invite-link" class="invite-link"></code><button id="btn-copy-link" class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copiar</button></div>
-      <div class="invite-actions"><button id="btn-share" class="btn btn-ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></svg>Compartilhar</button><span class="invite-hint">A chave secreta vai no link — envie só para quem deve entrar.</span></div>
+            <div class="share-grid">
+        <button id="btn-whatsapp" class="btn btn-whatsapp"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8 8 0 1 1 12 20zm4.4-5.6c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1-.2.2-.6.8-.8.9-.1.2-.3.2-.5.1a6.5 6.5 0 0 1-3.2-2.8c-.2-.4.2-.4.6-1.2.1-.2 0-.4 0-.5l-.7-1.7c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.5.1-.7.3-.2.2-.9.9-.9 2.1s.9 2.5 1 2.6c.1.2 1.8 2.8 4.4 3.9.6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.1.2-.6.2-1 .1-1.1 0-.1-.2-.2-.4-.3z"/></svg>WhatsApp</button>
+        <button id="btn-telegram" class="btn btn-telegram"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.8 15.6 9.5 20c.5 0 .7-.2.9-.4l2.2-2.1 4.5 3.3c.8.4 1.4.2 1.6-.8l3.2-15.7c.2-1.2-.5-1.7-1.3-1.4L2.9 9.7c-1.2.5-1.2 1.1-.2 1.4l4.5 1.4L17.6 6c.5-.3.9-.1.6.2z"/></svg>Telegram</button>
+        <button id="btn-share" class="btn btn-ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></svg>Mais opções</button>
+      </div>
+      <div class="auto-copy-note" id="auto-copy-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>Preparando o link…</span></div>
+      <p class="invite-hint">A chave secreta vai no link — envie só para quem deve entrar. Quem abrir o link entra automaticamente.</p>
     </div>
     <div class="qr-card" id="qr-card"><canvas id="qr-waiting" width="180" height="180"></canvas><span>ou aponte a câmera</span></div>
     <button id="btn-cancel-waiting" class="btn btn-ghost">Cancelar e sair</button>
@@ -145,6 +169,10 @@
       <span id="latency" class="latency" hidden></span>
       <button id="btn-end-top" class="icon-btn danger" aria-label="Encerrar conversa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button>
     </header>
+    <div id="conn-help" class="conn-help" hidden>
+      <div class="conn-help-copy"><strong id="conn-help-title">Conectando automaticamente…</strong><p id="conn-help-text">Estamos localizando o outro navegador. Mantenha esta aba aberta.</p></div>
+      <button id="btn-retry-now" class="btn btn-ghost btn-sm">Tentar agora</button>
+    </div>
     <div id="msg-scroll" class="msg-scroll">
       <div id="empty-state" class="empty-state">
         <svg class="logo" viewBox="0 0 64 64"><rect x="8" y="10" width="38" height="30" rx="11" fill="url(#nvg)"/><path d="M18 40l-7 12 16-12z" fill="url(#nvg)"/><circle cx="50" cy="46" r="3.4" fill="#35E0E6" opacity=".85"/><circle cx="57" cy="40" r="2.5" fill="#35E0E6" opacity=".5"/><circle cx="62" cy="34" r="1.7" fill="#35E0E6" opacity=".3"/></svg>
@@ -194,6 +222,7 @@
 <div id="modal-confirm" class="modal" hidden><div class="modal-card"><h3 id="confirm-title"></h3><p id="confirm-text"></p><div class="modal-actions"><button id="btn-confirm-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-confirm-ok" class="btn btn-danger">Encerrar</button></div></div></div>
 <div id="modal-name" class="modal" hidden><div class="modal-card"><h3>Seu apelido</h3><p>Um nome aleatório protege sua identidade. Troque se quiser.</p><input id="name-input" class="text-input" maxlength="24" autocomplete="off"><div class="modal-actions"><button id="btn-name-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-name-save" class="btn btn-primary">Salvar</button></div></div></div>
 <div id="lightbox" class="lightbox" hidden><button id="lightbox-close" class="icon-btn lb-close" aria-label="Fechar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><img id="lightbox-img" alt=""><a id="lightbox-download" class="btn btn-primary lb-dl" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 20h14"/></svg>Baixar</a></div>
+<div id="modal-join" class="modal" hidden><div class="modal-card"><h3>Entrar com um convite</h3><p>Cole o link completo que você recebeu. A conexão começa automaticamente.</p><textarea id="join-input" class="text-input join-textarea" rows="3" placeholder="Cole o link do convite aqui…"></textarea><div class="join-error" id="join-error" hidden></div><div class="modal-actions"><button id="btn-join-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-join-go" class="btn btn-primary">Entrar automaticamente</button></div></div></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>
