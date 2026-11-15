@@ -411,7 +411,7 @@ const RELAY_URLS = [
 ];
 const FORCE_RELAY = /[?&]relay=1/.test(location.search);   // teste: pula o P2P
 const RELAY_AFTER = FORCE_RELAY ? 0 : 6000;                // espera o P2P por 6 s antes de usar o relay
-const R = { on: false, gen: 0, links: [], sid: null, sub: '', pub: '', tick: 0, needSince: 0 };
+const R = { on: false, gen: 0, links: [], sid: null, sub: '', pub: '', tick: 0, needSince: 0, used: false, fullSince: 0 };
 
 function mqttPacket(head, ...parts){
   let len = 0; parts.forEach(p => { len += p.length; });
@@ -433,13 +433,14 @@ function relayLink(url, gen){
       ws.send(mqttPacket(0x82, [0, 1], mqttStr(R.sub), [0]));
     } else if (type === 9) {                            // SUBACK
       L.ready = true;
+      if (S.role === 'host' && !S.connected) relayCtl(5, rand(8)).then(f => L.pub(f)).catch(() => {});   // avisa: voltei
       clearInterval(L.ka);
       L.ka = setInterval(() => { try { if (ws.readyState === 1) ws.send(new Uint8Array([0xC0, 0])); } catch {} }, 20000);
     } else if (type === 3) {                            // PUBLISH
       if (body.length < 2) return;
       let p = 2 + ((body[0] << 8) | body[1]);
       if ((first >> 1) & 3) p += 2;
-      if (p <= body.length) relayIn(L, body.slice(p));
+      if (p <= body.length) relayRecv(L, body.slice(p));
     }
   }
   function feed(chunk){
@@ -492,7 +493,9 @@ async function relayCtlOk(body){
   } catch { return false; }
 }
 function relayConn(L, sid){
-  const h = {}; let wd = 0;
+  const h = {}; let wd = 0, bye = null;
+  const prep = () => relayCtl(4, sid).then(f => { bye = f; }).catch(() => {});
+  prep(); const byeT = setInterval(prep, 60000);
   const c = {
     relay: true, open: true, link: L, sidHex: hex(sid),
     on(e, f){ (h[e] = h[e] || []).push(f); },
@@ -505,13 +508,16 @@ function relayConn(L, sid){
     },
     // abas em segundo plano têm timers atrasados (até 1/min): a folga precisa cobrir isso
     touch(){ clearTimeout(wd); wd = setTimeout(() => c.drop(), 75000); },
-    drop(){ if (!c.open) return; c.open = false; clearTimeout(wd); c.emit('close'); },
-    close(){ if (!c.open) return; relayCtl(4, sid).then(f => L.pub(f)).catch(() => {}); c.drop(); },
+    drop(){ if (!c.open) return; c.open = false; clearTimeout(wd); clearInterval(byeT); c.emit('close'); },
+    // TCHAU já cifrado de antemão: ao fechar a aba não dá tempo de cifrar (é assíncrono)
+    close(){ if (!c.open) return; if (bye) L.pub(bye); else relayCtl(4, sid).then(f => L.pub(f)).catch(() => {}); c.drop(); },
     get bufferedAmount(){ return L.ws ? L.ws.bufferedAmount : 0; }
   };
   c.touch();
   return c;
 }
+let relayQ = Promise.resolve();   // fila: dados nunca passam na frente do aceite
+function relayRecv(L, d){ relayQ = relayQ.then(() => relayIn(L, d)).catch(() => {}); }
 async function relayIn(L, d){
   if (!R.on || S.ended || d.length < 9) return;
   const type = d[0], sid = d.slice(1, 9), sidHex = hex(sid), body = d.subarray(9);
@@ -520,29 +526,50 @@ async function relayIn(L, d){
     if (c && c.relay && c.open && c.link === L && c.sidHex === sidHex) { c.touch(); c.emit('data', body); }
     return;
   }
-  if (S.role === 'guest' && sidHex !== hex(R.sid)) return;
+  if (S.role === 'guest' && type !== 5 && sidHex !== hex(R.sid)) return;
   if (!(await relayCtlOk(body))) return;
   const ack = (S.role === 'host' && type === 1) ? await relayCtl(2, sid) : null;
   if (!R.on || S.ended) return;
   const c = S.conn && S.conn.relay ? S.conn : null;       // relido depois dos awaits
   if (type === 4) { if (c && c.sidHex === sidHex) c.drop(); return; }
+  if (S.role === 'guest' && type === 5) {                  // anfitrião voltou: a sessão antiga morreu com ele
+    if (c && c.open) c.drop();
+    relayCtl(1, R.sid).then(f => R.links.forEach(l => l.pub(f))).catch(() => {});
+    return;
+  }
+  if (S.role === 'guest' && type === 6) {                  // sala cheia — só desiste se persistir (pode ser sessão zumbi nossa)
+    if (S.connected) return;
+    if (!R.fullSince) R.fullSince = Date.now();
+    else if (Date.now() - R.fullSince > 25000) wipe('full');
+    return;
+  }
   if (S.role === 'host' && type === 1) {
     if (c && c.open && c.sidHex === sidHex) { if (c.link === L) L.pub(ack); return; }   // ACK perdido: repete
     const live = S.conn && S.conn.open && S.connected && Date.now() - (S.lastContact || 0) < 15000;
-    if (live) return;                                    // sala ocupada por conexão viva
+    if (live) { relayCtl(6, sid).then(f => L.pub(f)).catch(() => {}); return; }        // sala ocupada
     const rc = relayConn(L, sid);
     attachConn(rc); L.pub(ack); rc.emit('open');
   } else if (S.role === 'guest' && type === 2) {
     if (S.conn && S.conn.open) return;
+    R.fullSince = 0;
     const rc = relayConn(L, R.sid);
     attachConn(rc); rc.emit('open');
   }
 }
 function relayTick(){
   if (!R.on || S.ended || S.role !== 'guest') return;
-  if (S.conn && S.conn.open) { R.needSince = 0; return; }
+  const c = S.conn;
+  if (c && c.open) {
+    R.needSince = 0;
+    if (c.relay) {
+      R.used = true;
+      // sem resposta aos pings: sessão morta (anfitrião caiu sem avisar). Aba oculta tem timers lentos.
+      if (S.connected && Date.now() - (S.lastContact || 0) > (document.hidden ? 90000 : 25000)) c.drop();
+    }
+    return;
+  }
   if (!R.needSince) R.needSince = Date.now();
-  if (Date.now() - R.needSince < RELAY_AFTER) return;
+  if (!R.used && Date.now() - R.needSince < RELAY_AFTER) return;   // 1ª vez: dá chance ao P2P
   relayCtl(1, R.sid).then(f => { R.links.forEach(l => l.pub(f)); }).catch(() => {});
 }
 function relayStop(){
@@ -560,7 +587,7 @@ async function relayStart(){
   if (R.gen !== gen || S.ended || S.roomId !== room) return;
   const base = 'nevoa/' + hex(d.slice(0, 16));
   R.sub = base + (role === 'host' ? '/g' : '/h'); R.pub = base + (role === 'host' ? '/h' : '/g');
-  R.sid = rand(8); R.needSince = Date.now(); R.on = true;
+  R.sid = rand(8); R.needSince = Date.now(); R.on = true; R.used = false; R.fullSince = 0;
   R.links = RELAY_URLS.map(u => relayLink(u, gen));
   if (role === 'guest') R.tick = setInterval(relayTick, 2000);
 }
@@ -658,6 +685,7 @@ function handle(o){
   if (S.ended) return;
   switch (o.t) {
     case 'hello': {
+      if (!o.re) sendJSON({ t: 'hello', v: 1, re: 1, name: S.me.name, color: S.me.color, role: S.role });   // responde 1x: o lado que reabriu precisa do nosso hello
       S.peerProfile = { name: String(o.name || 'Anônimo').slice(0, 24), color: Math.abs(Number(o.color) || 0) % AV.length };
       renderPeer();
       const first = !S.connected;
@@ -718,7 +746,7 @@ function handle(o){
       }
       break;
     }
-    case 'ping': sendJSON({ t: 'pong', ts: o.ts }); break;
+    case 'ping': S.lastContact = Date.now(); sendJSON({ t: 'pong', ts: o.ts }); break;
     case 'pong': {
       const r = Date.now() - Number(o.ts || Date.now());
       if (r >= 0 && r < 30000) { S.rtt = Math.max(1, r); S.lastContact = Date.now(); renderLatency(); renderQuality(); }
