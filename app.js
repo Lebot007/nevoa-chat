@@ -1196,7 +1196,7 @@ async function joinRoom(h, password){
 /* ───────── fundo: partículas de névoa ───────── */
 function initFx(){
   const cv = $('#fx'), ctx = cv.getContext('2d');
-  if (!ctx || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (!ctx) return;   // anima sempre, mesmo com "reduzir movimento" no aparelho
   const COLORS = ['139,124,255', '53,224,230', '255,77,158'];
   const sprites = COLORS.map(c => {
     const s = document.createElement('canvas'); s.width = s.height = 64;
@@ -1719,7 +1719,6 @@ function openSplit(){
 async function copyText(t, okMsg){ try { await navigator.clipboard.writeText(t); toast('ok', okMsg); } catch { toast('error', 'Não foi possível copiar.'); } }
 
 function fogDissipate(){
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const f = $('#fog-veil');
   f.classList.add('show');
   requestAnimationFrame(() => requestAnimationFrame(() => { f.classList.add('dissipate'); setTimeout(() => f.classList.remove('show','dissipate'), 1200); }));

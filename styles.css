@@ -193,7 +193,7 @@ body.app-mode main{height:100dvh}
   background:rgba(61,220,151,.07);border:1px solid rgba(61,220,151,.22);border-radius:12px;padding:12px 18px}
 
 /* CHAT */
-.chat-shell.active{display:grid;grid-template-columns:320px 1fr;height:100%}
+.chat-shell.active{display:grid;grid-template-columns:320px 1fr;grid-template-rows:minmax(0,1fr);height:100%}
 .sidebar{display:flex;flex-direction:column;gap:12px;padding:16px;overflow-y:auto;
   background:color-mix(in srgb,var(--bg1) 92%,transparent);border-right:1px solid var(--line-soft)}
 .side-head{display:flex;align-items:center;justify-content:space-between}
@@ -218,7 +218,7 @@ body.app-mode main{height:100dvh}
 .sec-card p{line-height:1.45}
 .sidebar .btn-danger{margin-top:auto}
 
-.chat-main{position:relative;display:flex;flex-direction:column;height:100%;min-width:0}
+.chat-main{position:relative;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0}
 .chat-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-soft);
   background:color-mix(in srgb,var(--bg1) 85%,transparent);backdrop-filter:blur(12px)}
 .ch-info{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -233,7 +233,7 @@ body.app-mode main{height:100dvh}
 .latency[data-q="ok"]{color:var(--amber);border-color:rgba(255,176,32,.3)}
 .latency[data-q="bad"]{color:var(--red);border-color:rgba(255,84,104,.3)}
 
-.msg-scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.msg-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .msg-list{margin-top:auto;display:flex;flex-direction:column;padding:16px 18px 10px}
 .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
   color:var(--faint);text-align:center;padding:40px 24px;max-width:340px;margin:0 auto;font-size:14px}
@@ -364,10 +364,6 @@ body.app-mode main{height:100dvh}
   .emoji-pop{right:12px;width:min(296px,calc(100vw - 24px))}
   .msg-list{padding:12px 10px 8px}
   .file-card{min-width:200px}
-}
-@media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-  html{scroll-behavior:auto}
 }
 
 /* UX: compartilhamento e entrada automática */
@@ -501,13 +497,9 @@ body.privacy-blurred .chat-main, body.privacy-blurred .sidebar{ filter:blur(16px
 .ticks{ transition:color .25s; }
 .ticks.t-read{ color:var(--cyan); }
 .progress i{ transition:width .2s ease; }
-.msg{ animation:msg-in .22s ease; }
+.msg{ animation:msg-in .22s var(--ease); }
 @keyframes msg-in{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
 .conn-help{ animation:msg-in .25s ease; }
-@media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{ animation-duration:.001s!important; animation-iteration-count:1!important; transition-duration:.001s!important; }
-  html{ scroll-behavior:auto; }
-}
 
 
 /* ═══ Névoa mobile: sem sobreposição no header/composer, alvos de toque, iOS sem zoom ═══ */
@@ -576,3 +568,10 @@ body.app-mode #fx{ display:none; }
   .topbar{ background:color-mix(in srgb,var(--bg0) 94%,transparent); }
   .chat-head,.composer{ background:color-mix(in srgb,var(--bg1) 96%,transparent); }
 }
+
+/* links do topo não quebram linha; somem em telas médias */
+.top-link{white-space:nowrap}
+@media (max-width:900px){ .top-links,.brand-tag{display:none} }
+/* cartão de demonstração mantém alinhamento de chat mesmo no hero centralizado */
+.demo-card{text-align:left}
+#input::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
