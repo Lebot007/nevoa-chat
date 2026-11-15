@@ -86,7 +86,7 @@
     <div class="steps">
       <article class="step reveal"><span class="step-num">01</span><h3>Crie</h3><p>Um link único nasce no seu navegador. A chave de criptografia vai escondida nele — nunca em um servidor.</p></article>
       <article class="step reveal d1"><span class="step-num">02</span><h3>Compartilhe</h3><p>Envie o link para o grupo. Só quem tem o link entra, e a sala cabe até 10 pessoas.</p></article>
-      <article class="step reveal d2"><span class="step-num">03</span><h3>Desapareça</h3><p>Conversem, troquem arquivos e encerrem. O anfitrião apaga tudo de todos os aparelhos, sem deixar registro.</p></article>
+      <article class="step reveal d2"><span class="step-num">03</span><h3>Desapareça</h3><p>Conversem, troquem arquivos e encerrem. O admin apaga tudo de todos os aparelhos, sem deixar registro.</p></article>
     </div>
   </section>
 
@@ -97,7 +97,7 @@
       <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/><path d="m3 3 18 18"/></svg></span><h3>Zero banco de dados</h3><p>Não existe servidor guardando conversas. Os relays só repassam bytes cifrados em tempo real e não armazenam nada.</p></article>
       <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></span><h3>Grupo de até 10</h3><p>Todos conversam com todos. Relays públicos só repassam bytes cifrados — não guardam nada e não leem nada.</p></article>
       <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><h3>Memória volátil</h3><p>Arquivos vivem só na RAM. Textos ficam cifrados no seu dispositivo por até 12 h — e só você pode lê-los.</p></article>
-      <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></span><h3>Encerrar = evaporar</h3><p>O anfitrião encerra para todos: mensagens, arquivos e chaves somem de todos os aparelhos na hora. Os outros podem sair quando quiserem.</p></article>
+      <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></span><h3>Encerrar = evaporar</h3><p>O admin encerra para todos: mensagens, arquivos e chaves somem de todos os aparelhos na hora. Se o admin sai, o posto passa para o próximo da conversa.</p></article>
       <article class="priv-card reveal"><span class="priv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/><path d="m3 3 18 18"/></svg></span><h3>Anônimo por padrão</h3><p>Sem conta, e-mail ou telefone. Você recebe um apelido aleatório — e pode trocá-lo quando quiser.</p></article>
     </div>
   </section>
@@ -206,7 +206,7 @@
     <div id="msg-scroll" class="msg-scroll">
       <div id="empty-state" class="empty-state">
         <svg class="logo" viewBox="0 0 64 64"><rect x="8" y="10" width="38" height="30" rx="11" fill="url(#nvg)"/><path d="M18 40l-7 12 16-12z" fill="url(#nvg)"/><circle cx="50" cy="46" r="3.4" fill="#35E0E6" opacity=".85"/><circle cx="57" cy="40" r="2.5" fill="#35E0E6" opacity=".5"/><circle cx="62" cy="34" r="1.7" fill="#35E0E6" opacity=".3"/></svg>
-        <p>Diga olá. Esta conversa só existe entre vocês — e some quando o anfitrião encerrar.</p>
+        <p>Diga olá. Esta conversa só existe entre vocês — e some quando o admin encerrar.</p>
       </div>
       <div id="msg-list" class="msg-list" role="log" aria-live="polite"></div>
     </div>
@@ -284,7 +284,7 @@
 </div></div>
 <div id="modal-pass-join" class="modal" hidden><div class="modal-card">
   <h3>Sala protegida por senha</h3>
-  <p>Este convite exige uma senha. Peça ao anfitrião por outro canal.</p>
+  <p>Este convite exige uma senha. Peça a quem te convidou, por outro canal.</p>
   <input id="pass-join-input" class="text-input" type="password" maxlength="64" placeholder="Senha da sala" autocomplete="current-password">
   <div class="join-error" id="pass-join-error" hidden></div>
   <div class="modal-actions"><button id="btn-pass-join-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-pass-join-go" class="btn btn-primary">Entrar</button></div>

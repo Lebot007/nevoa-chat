@@ -200,34 +200,74 @@ try {
   t = await until(async () => /saiu/.test(await host.ev(`[...document.querySelectorAll('.sys-pill')].map(e=>e.textContent).join()`)), 3);
   log('aviso "saiu da conversa" aparece na hora', t ? 'sim' : 'não', !!t);
 
-  // 15) anfitrião fecha a aba → grupo continua; convidado F5 volta sem avisos
+  // 15) anfitrião fecha a aba → grupo continua e o admin passa para quem entrou primeiro (A1)
   const rest = G.slice(0, 8);
+  const isAdm = p => p.ev('__nevoa.iAmAdmin()');
+  log('antes: anfitrião é o admin', (await isAdm(host)) ? 'sim' : 'não', await isAdm(host));
   await host.cmd('Page.navigate', { url: 'about:blank' });
   t = await until(() => allCount(rest, 8), 20);
   log('anfitrião fecha a aba → os 8 seguem', t || 'caiu', !!t);
   await say(G[1], 'sem anfitriao');
   t = await until(() => allHave(rest.filter(p => p !== G[1]), 'sem anfitriao'), 15);
-  log('conversa continua sem o anfitrião', t || 'não chegou', !!t);
-  await sleep(9000);
+  log('conversa continua sem o anfitrião', t || 'faltou: ' + await missing(rest.filter(p => p !== G[1]), 'sem anfitriao'), !!t);
+  t = await until(() => isAdm(G[0]), 15);
+  log('admin passa para o 1º a entrar (A1)', t || 'não passou', !!t);
+  const admId = await G[0].ev('__nevoa.S.myId');
+  t = await until(async () => (await Promise.all(rest.map(p => p.ev('__nevoa.activeAdminId()')))).every(a => a === admId), 15);
+  log('todos concordam que A1 é o admin', t || 'divergência', !!t);
+  log('botão do novo admin', await G[0].ev(`document.querySelector('#btn-end-label').textContent`), /admin/.test(await G[0].ev(`document.querySelector('#btn-end-label').textContent`)));
+  t = await until(async () => /agora é o admin/.test(await G[3].ev(`[...document.querySelectorAll('.sys-pill')].map(e=>e.textContent).join()`)), 15);
+  log('aviso "Fulano agora é o admin" para os outros', t ? 'sim' : 'não apareceu', !!t);
+
+  // 16) novo admin dá F5: continua admin, sem avisos
+  await sleep(2000);
   const antes = await G[1].ev(`document.querySelectorAll('.sys-pill').length`);
   await G[0].cmd('Page.reload'); await sleep(1500); await G[0].ev(`document.querySelector('#btn-preview-go')?.click()`);
   t = await until(() => allCount(rest, 8), 25);
-  log('convidado F5 → volta à conversa', t || 'não voltou', !!t);
+  log('admin dá F5 → volta à conversa', t || 'não voltou', !!t);
+  t = await until(() => isAdm(G[0]), 15);
+  log('após F5 continua admin', t || 'perdeu o admin', !!t);
   t = await until(async () => (await G[0].ev(`__nevoa.directPeers().length`)) >= 1, 20);
   log('após F5, P2P com a casa A é refeito', t || 'não refez', !!t);
   await sleep(9000);
-  log('F5 não gera "saiu/entrou" para os outros', 'avisos novos: ' + ((await G[1].ev(`document.querySelectorAll('.sys-pill').length`)) - antes),
-    (await G[1].ev(`document.querySelectorAll('.sys-pill').length`)) === antes);
+  const depois = await G[1].ev(`document.querySelectorAll('.sys-pill').length`);
+  log('F5 do admin não gera avisos', 'avisos novos: ' + (depois - antes), depois === antes);
 
-  // 16) anfitrião volta e encerra para todos
+  // 17) anfitrião volta e retoma o admin; depois fecha de novo e o admin volta para A1
   await host.cmd('Page.navigate', { url: link }); await sleep(1500);
   t = await until(() => allCount([host, ...rest], 9), 25);
   log('anfitrião volta (mesma aba)', t || await count(host), !!t);
-  await host.ev(`document.querySelector('#btn-end').click()`); await sleep(300); await host.ev(`document.querySelector('#btn-confirm-ok').click()`);
-  t = await until(async () => (await Promise.all(rest.map(view))).every(v => v === 'view-ended'), 15);
-  log('anfitrião encerra → todos apagados', t ? await G[0].ev(`document.querySelector('#ended-title').textContent`) : 'alguém ficou', !!t);
-  const left = await Promise.all(rest.map(p => p.ev(`Object.keys(localStorage).filter(k=>k.startsWith('nevoa:v1:')).length + document.querySelectorAll('#msg-list .msg').length + __nevoa.S.peers.size`)));
-  log('nada sobrou (storage, tela, conexões diretas)', left.join(','), left.every(x => x === 0));
+  t = await until(async () => (await isAdm(host)) && !(await isAdm(G[0])), 15);
+  log('anfitrião retoma o admin', t || 'não retomou', !!t);
+  await host.cmd('Page.navigate', { url: 'about:blank' });
+  t = await until(() => isAdm(G[0]), 15);
+  log('anfitrião sai de novo → A1 volta a ser admin', t || 'não voltou', !!t);
+
+  // 18) A1 sai passando o admin → B2 (2º a entrar) assume
+  await G[0].ev(`document.querySelector('#btn-end').click()`); await sleep(400);
+  const leaveTxt = await G[0].ev(`document.querySelector('#btn-adm-leave')?.textContent`);
+  log('menu do admin oferece "Sair e passar o admin"', leaveTxt || 'sem menu', /passar o admin/.test(leaveTxt || ''));
+  await G[0].ev(`document.querySelector('#btn-adm-leave').click()`);
+  const rest2 = G.slice(1, 8);
+  t = await until(() => isAdm(G[1]), 15);
+  log('A1 sai → admin passa para B2 (4G, nunca foi anfitrião)', t || 'não passou', !!t);
+  t = await until(() => allCount(rest2, 7), 15);
+  log('todos veem 7/10', t || 'não atualizou', !!t);
+
+  // 19) quem não é admin não encerra, nem com assinatura falsa
+  await G[4].ev(`__nevoa.sendJSON({ t:'end', ts: Date.now(), apk: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', sig: 'AAAA' })`);
+  await sleep(3000);
+  const vs2 = await Promise.all(rest2.map(view));
+  log('assinatura falsa de "encerrar" é ignorada', vs2.every(v => v === 'view-chat') ? 'ninguém caiu' : vs2.join(','), vs2.every(v => v === 'view-chat'));
+
+  // 20) o novo admin (B2) encerra para todos
+  const ids = await Promise.all(rest2.map(p => p.ev('__nevoa.S.myId')));
+  await G[1].ev(`document.querySelector('#btn-end').click()`); await sleep(400); await G[1].ev(`document.querySelector('#btn-adm-end').click()`);
+  t = await until(async () => (await Promise.all(rest2.map(view))).every(v => v === 'view-ended'), 15);
+  log('novo admin encerra → todos apagados', t ? await G[2].ev(`document.querySelector('#ended-title').textContent`) : (await Promise.all(rest2.map(view))).join(','), !!t);
+  // (todas as abas do teste dividem o mesmo navegador: confere só os dados de cada participante)
+  const left = await Promise.all(rest2.map((p, i) => p.ev(`Object.keys(localStorage).filter(k=>k.startsWith('nevoa:v1:') && k.endsWith(${JSON.stringify(ids[i])})).length + Object.keys(sessionStorage).filter(k=>k.startsWith('nevoa:adm:') || k.startsWith('nevoa:me:')).length + document.querySelectorAll('#msg-list .msg').length + __nevoa.S.peers.size`)));
+  log('nada sobrou (storage, chave de admin, tela, P2P)', left.join(','), left.every(x => x === 0));
 
   const errs = [...all, X].flatMap(p => p.errs);
   log('erros de JavaScript em todas as abas', errs.length ? errs.slice(0, 3).join(' | ') : 'nenhum', !errs.length);

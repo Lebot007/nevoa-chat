@@ -97,11 +97,13 @@ function genMe(){ return { name: pick(ANIMALS) + ' ' + pick(ADJS), color: Math.f
 const S = {
   role: null, roomId: null, keyB64: null, cryptoKey: null,
   connected: false, wasConnected: false, ended: false, linkUp: false, admitted: false, admitAt: 0,
-  myId: null, myIdBytes: null, joinedAt: 0, members: new Map(), hostTag: null, hostSecret: null,
+  myId: null, myIdBytes: null, joinedAt: 0, members: new Map(), hostTag: null,
   seen: new Map(), mySent: new Map(), sentAt: new Map(), leaveFrame: null, gone: new Map(),
   peers: new Map(), rtcStash: new Map(), p2pFails: new Map(), p2pRetry: new Map(), returning: false,
   bootId: hex(rand(4)),                 // muda a cada carregamento da página (F5)
-  helloSeq: 0,                          // ordem dos "olás": chegam por vários caminhos, às vezes fora de ordem
+  helloSeq: 0,
+  adminKey: null, dh: null, keySent: new Map(), adminNoteTimer: 0, adminNoted: undefined,
+  deadBoots: new Set(),                 // páginas que disseram "saí": um olá atrasado delas não traz ninguém de volta                          // ordem dos "olás": chegam por vários caminhos, às vezes fora de ordem
   view: 'landing', netState: 'idle', me: genMe(), greeted: false,
   messages: [], msgIndex: new Map(), msgNodes: new Map(),
   transfersIn: new Map(), transfersOut: new Map(), outFiles: new Map(), outQueue: [], outBusy: false,
@@ -209,20 +211,21 @@ function setAvatar(el, p){
 function renderMe(){
   setAvatar($('#me-avatar'), S.me);
   $('#me-name').textContent = S.me.name;
-  $('#me-role').textContent = 'você · ' + (S.role === 'host' ? 'anfitrião' : S.role === 'guest' ? 'convidado' : '—');
-  const host = S.role === 'host';
-  $('#btn-end-label').textContent = host ? 'Encerrar e apagar para todos' : 'Sair da conversa';
-  $('#btn-end-top').setAttribute('aria-label', host ? 'Encerrar para todos' : 'Sair da conversa');
-  $('#btn-end-top').title = host ? 'Encerrar para todos' : 'Sair da conversa';
+  const adm = iAmAdmin();
+  $('#me-role').textContent = 'você · ' + (adm ? 'admin' : S.role ? 'convidado' : '—');
+  $('#btn-end-label').textContent = adm ? 'Encerrar ou sair (admin)' : 'Sair da conversa';
+  $('#btn-end-top').setAttribute('aria-label', adm ? 'Encerrar para todos ou sair' : 'Sair da conversa');
+  $('#btn-end-top').title = adm ? 'Encerrar para todos ou sair' : 'Sair da conversa';
 }
 function renderMembers(){
   const box = $('#member-list');
   if (box) {
     const list = admittedMembers();
+    const admin = activeAdminId();
     box.innerHTML = list.length ? list.map(m => {
       const c = AV[m.color % AV.length];
       return `<div class="participant"><span class="avatar" style="background:linear-gradient(135deg,${c[0]},${c[1]})">${esc(m.name.charAt(0).toUpperCase())}</span>` +
-        `<div class="p-info"><span class="p-name">${esc(m.name)}</span><span class="p-role">${m.role === 'host' ? 'anfitrião' : 'convidado'}${m.presence === 'away' ? ' · ausente' : ''} · ${isDirect(m.id) ? 'direto' : 'relay'}</span></div>` +
+        `<div class="p-info"><span class="p-name">${esc(m.name)}</span><span class="p-role">${m.id === admin ? 'admin' : 'convidado'}${m.presence === 'away' ? ' · ausente' : ''} · ${isDirect(m.id) ? 'direto' : 'relay'}</span></div>` +
         `<span class="dot dot-${m.presence === 'away' ? 'warn' : 'on'}"></span></div>`;
     }).join('') : '<p class="member-empty">Ninguém mais por aqui ainda. Envie o link — cabem até ' + MAX_MEMBERS + ' pessoas.</p>';
   }
@@ -292,7 +295,7 @@ async function sendJSON(o, opts){
 function keyFail(){
   S.keyFails++;
   if (S.keyFails === 1) toast('error', 'Falha de criptografia — o link pode estar incorreto.');
-  if (S.keyFails >= 3 && !S.connected) showError('As chaves não conferem. Peça um novo link ao anfitrião.');
+  if (S.keyFails >= 3 && !S.connected) showError('As chaves não conferem. Peça um novo link a quem te convidou.');
 }
 /* ───────── persistência local cifrada ───────── */
 const skey = () => 'nevoa:v1:' + S.roomId + ':' + S.myId;   // por participante: abas no mesmo navegador não se misturam
@@ -701,11 +704,15 @@ function helloPayload(re){
   return { t: 'hello', re: re ? 1 : 0, v: 2, name: S.me.name, color: S.me.color, role: S.role,
     joinedAt: S.joinedAt, adm: S.admitted ? 1 : 0, presence: S.presence, ln: linkMask(), boot: S.bootId, seq: ++S.helloSeq };
 }
-function announce(re, force){
+async function announce(re, force){
   if (!R.on || S.ended) return;
   if (!re && !force && Date.now() - R.lastAnnounce < 1500) return;
   if (!re) R.lastAnnounce = Date.now();
-  sendJSON(helloPayload(re), { rtt: true });
+  const p = helloPayload(re);
+  if (S.dh) p.ek = S.dh.pub;
+  // quem tem a chave de admin prova isso assinando o próprio "olá"
+  if (S.adminKey) { p.apk = S.adminKey.pub; try { p.asig = await adminSign('hello|' + S.roomId + '|' + S.myId + '|' + p.boot + '|' + p.seq); } catch {} }
+  sendJSON(p, { rtt: true });
   prepLeave();
 }
 async function prepLeave(){             // "saí" já cifrado: ao fechar a aba não dá tempo de cifrar
@@ -749,6 +756,8 @@ function checkAdmission(){
   if (S.view === 'waiting' && admittedMembers().length) showView('chat');
   sound('connect'); fogDissipate();
   renderMembers(); updateConn(); flushReads(); saveSoon(); p2pSync();
+  // quem é o admin ao entrar não vira aviso; só as trocas daqui em diante
+  setTimeout(() => { if (!S.ended && S.adminNoted === undefined) { S.adminNoted = activeAdminId(); adminChanged(); } }, 4000);
 }
 // reforço do limite: se alguém chegou além dos 10 (ex.: não enxergou parte da sala ao entrar),
 // o participante admitido de menor id avisa essa pessoa
@@ -774,6 +783,7 @@ function removeMember(id, announced){
   clearTimeout(m.typingTimer);
   S.members.delete(id);
   p2pDrop(id, false); S.p2pFails.delete(id); S.p2pRetry.delete(id);
+  if (m.isAdmin || S.adminKey) adminChanged();
   if (m.shown) { S.gone.set(id, Date.now()); trimMap(S.gone, 200); }
   if (m.shown && S.admitted && !S.ended) {
     // se for só um F5, a pessoa volta em segundos com o mesmo id: não poluímos a conversa
@@ -810,7 +820,7 @@ async function relayStart(){
   R.topic = 'nevoa/' + hex(d.slice(0, 16)) + '/all';
   R.on = true;
   R.links = RELAYS.map((c, i) => relayLink(c, i, gen));
-  R.hb = setInterval(() => { if (S.linkUp) announce(true); directPeers().forEach(p2pPing); p2pSync(); }, 10000);   // batimento: presença, latência, P2P
+  R.hb = setInterval(() => { if (S.linkUp) announce(true); directPeers().forEach(p2pPing); p2pSync(); adminDuty(); }, 10000);   // batimento: presença, latência, P2P
   R.prune = setInterval(pruneMembers, 5000);
   updateConn();
 }
@@ -828,6 +838,8 @@ function handle(o, from){
   switch (o.t) {
     case 'hello': {
       // quem saiu há menos de 1 min e voltou (F5, rede caiu) não gera outro "entrou"
+      // "olá" atrasado de uma página que já disse "saí" (chegou por outro broker/P2P depois do "saí"): ignora
+      if (S.deadBoots.has(from + ':' + String(o.boot || ''))) break;
       // "olá" atrasado (chegou depois de um mais novo por outro broker/P2P): só conta como sinal de vida
       if (mb && mb.boot && mb.boot === String(o.boot || '') && Number(o.seq) <= (mb.seq || 0)) {
         if (!o.re) setTimeout(() => announce(true), 120 + Math.random() * 700);
@@ -839,6 +851,12 @@ function handle(o, from){
       // a pessoa recarregou a página: a conexão direta antiga morreu, refaz já (sem esperar o retry)
       if (o.boot && m.boot && m.boot !== o.boot) { p2pDrop(from, false); S.p2pRetry.delete(from); S.p2pFails.delete(from); }
       m.boot = String(o.boot || '').slice(0, 16);
+      if (typeof o.ek === 'string') m.ek = o.ek.slice(0, 120);
+      if (o.apk && o.asig) {
+        adminVerify(o.apk, o.asig, 'hello|' + S.roomId + '|' + from + '|' + m.boot + '|' + o.seq).then(ok => {
+          if (S.members.get(from) === m && m.isAdmin !== ok) { m.isAdmin = ok; adminChanged(); }
+        });
+      } else if (m.isAdmin) { m.isAdmin = false; adminChanged(); }
       m.name = String(o.name || 'Anônimo').slice(0, 24).trim() || 'Anônimo';
       m.color = Math.abs(Number(o.color) || 0) % AV.length;
       m.role = o.role === 'host' ? 'host' : 'guest';
@@ -858,10 +876,15 @@ function handle(o, from){
           if (S.view === 'waiting') { showView('chat'); fogDissipate(); }
         }
       } else if (prevName && prevName !== m.name && m.shown) saveSoon();
-      renderMembers(); refreshStatus(); p2pSync();
+      renderMembers(); refreshStatus(); p2pSync(); adminDuty();
       break;
     }
-    case 'leave': if (mb) removeMember(from, !o.final); break;
+    case 'leave':                                                  // final = clicou em Sair (aviso na hora); sem final pode ser só F5
+      if (mb) {
+        if (mb.boot) { S.deadBoots.add(from + ':' + mb.boot); if (S.deadBoots.size > 500) S.deadBoots.delete(S.deadBoots.values().next().value); }
+        removeMember(from, !o.final);
+      }
+      break;
     case 'full':                                                   // quem já está na sala avisa: passou de 10
       if (o.to === S.myId && mb && mb.adm && !S.ended) sendJSON({ t: 'leave' }).finally(() => wipe('full'));
       break;   // final = clicou em Sair (aviso na hora); sem final pode ser só F5
@@ -966,19 +989,137 @@ function handle(o, from){
       if (n) { mb.name = n; renderMembers(); refreshStatus(); }
       break;
     }
-    case 'rtc': onRtc(o, from); break;                            // combinação da conexão direta
-    case 'end': verifyEnd(o, from); break;                         // só o anfitrião encerra
+    case 'rtc': onRtc(o, from); break;
+    case 'akey': onAdminKey(o); break;                              // chave de admin entregue a mim                            // combinação da conexão direta
+    case 'end': verifyEnd(o, from); break;                         // só o admin (assinatura confere com o link) encerra
   }
+}
+/* ───────── admin transferível ─────────
+   Quem cria a sala gera uma chave de assinatura (ECDSA P-256). O link leva só a "impressão digital"
+   (hash) da chave pública (&h=). Quem tem a chave privada prova ser admin assinando seus "olás", e só
+   um "encerrar" assinado por ela apaga a conversa de todos.
+   Sucessão: o admin entrega uma cópia da chave ao próximo da fila (quem entrou primeiro depois dele),
+   cifrada só para essa pessoa (ECDH). Se o admin sai — mesmo fechando a aba de repente —, o próximo
+   já tem a chave e assume; e assim por diante. Se o admin original volta, retoma o posto. */
+const EC_SIGN = { name: 'ECDSA', namedCurve: 'P-256' }, EC_HASH = { name: 'ECDSA', hash: 'SHA-256' };
+const EC_DH = { name: 'ECDH', namedCurve: 'P-256' };
+const admKey = () => 'nevoa:adm:' + S.roomId;
+const tagOf = async raw => b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', raw)).slice(0, 16));
+const pubCache = new Map();               // chave pública (b64) -> CryptoKey que confere com o link, ou null
+async function adminPub(b64){
+  if (pubCache.has(b64)) return pubCache.get(b64);
+  let k = null;
+  try {
+    const raw = ub64(b64);
+    if (S.hostTag && await tagOf(raw) === S.hostTag) k = await crypto.subtle.importKey('raw', raw, EC_SIGN, false, ['verify']);
+  } catch { k = null; }
+  pubCache.set(b64, k);
+  return k;
+}
+async function adminVerify(pubB64, sigB64, text){
+  const k = await adminPub(String(pubB64 || ''));
+  if (!k) return false;
+  try { return await crypto.subtle.verify(EC_HASH, k, ub64(String(sigB64 || '')), te.encode(text)); } catch { return false; }
+}
+async function adminSign(text){ return b64u(new Uint8Array(await crypto.subtle.sign(EC_HASH, S.adminKey.priv, te.encode(text)))); }
+async function setAdminKey(jwk, pubB64, persist){
+  if (!(await adminPub(pubB64))) throw new Error('a chave não confere com o link');
+  const priv = await crypto.subtle.importKey('jwk', jwk, EC_SIGN, true, ['sign']);
+  S.adminKey = { priv, jwk, pub: pubB64 };
+  if (persist) { try { sessionStorage.setItem(admKey(), JSON.stringify({ jwk, pub: pubB64 })); } catch {} }
+}
+async function createAdminKey(){
+  const kp = await crypto.subtle.generateKey(EC_SIGN, true, ['sign', 'verify']);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+  S.hostTag = await tagOf(raw);
+  await setAdminKey(await crypto.subtle.exportKey('jwk', kp.privateKey), b64u(raw), true);
+}
+async function loadAdminKey(){
+  try {
+    const o = JSON.parse(sessionStorage.getItem(admKey()) || 'null');
+    if (o && o.jwk && o.pub) await setAdminKey(o.jwk, o.pub, false);
+  } catch { S.adminKey = null; }
+}
+async function ensureDH(){                // par de chaves desta aba para receber a chave de admin cifrada
+  if (S.dh) return;
+  const kp = await crypto.subtle.generateKey(EC_DH, false, ['deriveKey']);
+  S.dh = { priv: kp.privateKey, pub: b64u(new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey))) };
+}
+async function dhKey(otherPubB64, usage){
+  const pub = await crypto.subtle.importKey('raw', ub64(otherPubB64), EC_DH, false, []);
+  return crypto.subtle.deriveKey({ name: 'ECDH', public: pub }, S.dh.priv, { name: 'AES-GCM', length: 256 }, false, [usage]);
+}
+// admin ativo: dentre quem prova ter a chave, quem entrou primeiro (todos calculam igual)
+function activeAdminId(){
+  const c = admittedMembers().filter(m => m.isAdmin);
+  if (S.adminKey && S.admitted) c.push({ id: S.myId, joinedAt: S.joinedAt });
+  c.sort(byJoin);
+  return c.length ? c[0].id : null;
+}
+const iAmAdmin = () => !!S.adminKey && S.admitted && activeAdminId() === S.myId;
+const nextInLine = () => admittedMembers().find(m => m.id !== S.myId);   // já ordenados por chegada
+// o admin ativo garante que o próximo da fila já tem a chave (assim uma saída repentina não deixa a sala sem admin)
+async function adminDuty(){
+  if (!iAmAdmin() || !S.dh) return;
+  const next = nextInLine();
+  if (!next || next.isAdmin || !next.ek) return;
+  if (S.keySent.get(next.id) === next.ek) return;                         // já entregue para esta aba dele
+  S.keySent.set(next.id, next.ek);
+  try {
+    const k = await dhKey(next.ek, 'encrypt');
+    const iv = rand(12);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(S.roomId + '|' + next.id) }, k,
+      te.encode(JSON.stringify({ jwk: S.adminKey.jwk, pub: S.adminKey.pub }))));
+    sendJSON({ t: 'akey', to: next.id, ek: S.dh.pub, iv: b64u(iv), ct: b64u(ct) });
+  } catch { S.keySent.delete(next.id); }
+}
+async function onAdminKey(o){
+  if (o.to !== S.myId || S.adminKey || !S.dh || !S.hostTag) return;
+  try {
+    const k = await dhKey(String(o.ek || ''), 'decrypt');
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(String(o.iv || '')), additionalData: te.encode(S.roomId + '|' + S.myId) }, k, ub64(String(o.ct || '')));
+    const d = JSON.parse(td.decode(pt));
+    await setAdminKey(d.jwk, d.pub, true);
+    announce(false, true);                                               // passa a provar a chave nos "olás"
+    adminChanged();
+  } catch {}
+}
+// troca de admin: a tela atualiza na hora; o aviso na conversa espera 8 s (um F5 do admin não gera aviso)
+function adminChanged(){
+  renderMe(); renderMembers();
+  clearTimeout(S.adminNoteTimer);
+  S.adminNoteTimer = setTimeout(() => {
+    if (S.ended || !S.admitted || S.adminNoted === undefined) return;
+    const a = activeAdminId();
+    if (a === S.adminNoted) return;
+    S.adminNoted = a;
+    if (!a) return;
+    if (a === S.myId) { pushMessage(sysMsg('Você agora é o admin: pode encerrar a conversa para todos.', 'info')); toast('info', 'Você agora é o admin da conversa.'); }
+    else pushMessage(sysMsg(memberName(a) + ' agora é o admin da conversa.', 'info'));
+  }, 8000);
+  adminDuty();
 }
 async function verifyEnd(o, from){
   let ok = false;
-  if (S.hostTag) {
-    try {
-      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', ub64(String(o.secret || ''))));
-      ok = b64u(d.slice(0, 16)) === S.hostTag;
-    } catch { ok = false; }
-  } else { const mb = S.members.get(from); ok = !!(mb && mb.role === 'host'); }   // links antigos, sem prova
+  if (o.apk && o.sig && S.hostTag) {                                     // assinado pela chave de admin
+    const ts = Number(o.ts) || 0;
+    ok = Math.abs(Date.now() - ts) < 600000 && await adminVerify(o.apk, o.sig, 'end|' + S.roomId + '|' + ts);
+  } else if (o.secret && S.hostTag) {                                    // salas antigas (segredo em vez de assinatura)
+    try { ok = await tagOf(ub64(String(o.secret))) === S.hostTag; } catch { ok = false; }
+  } else if (!S.hostTag) { const mb = S.members.get(from); ok = !!(mb && mb.role === 'host'); }   // link sem &h=
   if (ok && !S.ended) wipe('host-ended');
+}
+async function endForAll(){
+  const ts = Date.now();
+  const msg = { t: 'end', ts };
+  if (S.adminKey) { msg.apk = S.adminKey.pub; msg.sig = await adminSign('end|' + S.roomId + '|' + ts); }
+  await sendJSON(msg);
+  setTimeout(() => wipe('me'), 200);
+}
+async function leaveRoom(){
+  if (iAmAdmin()) await adminDuty();                                     // garante que o próximo recebeu a chave
+  await sendJSON({ t: 'leave', final: 1 });
+  setTimeout(() => wipe('left'), 200);
 }
 
 /* ───────── mensagens / render ───────── */
@@ -1477,7 +1618,8 @@ function resetSession(){
   S.ended = false; S.roomId = null; S.keyB64 = null; S.role = null;
   S.greeted = false; S.wasConnected = false; S.keyFails = 0; S.netState = 'idle';
   S.admitted = false; S.admitAt = 0; S.linkUp = false; S.myId = null; S.myIdBytes = null; S.joinedAt = 0;
-  S.hostTag = null; S.hostSecret = null; S.disconnects = 0;
+  S.hostTag = null; S.disconnects = 0;
+  S.adminKey = null; S.dh = null; S.keySent.clear(); S.adminNoted = undefined; clearTimeout(S.adminNoteTimer); pubCache.clear();
   S.me = genMe(); renderMe();
   S.replyTo = null; S.editingId = null; S.pinnedId = null; S.searchQuery = '';
 }
@@ -1489,10 +1631,10 @@ function wipe(reason){
   relayStop(); p2pCloseAll();
   S.connected = false;
   S.members.forEach(m => clearTimeout(m.typingTimer)); S.members.clear();
-  S.seen.clear(); S.mySent.clear(); S.sentAt.clear(); S.gone.clear(); S.leaveFrame = null; S.rtt = 0;
+  S.seen.clear(); S.mySent.clear(); S.sentAt.clear(); S.gone.clear(); S.deadBoots.clear(); S.leaveFrame = null; S.rtt = 0;
   S.messages.forEach(m => { if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch {} } });
   try { localStorage.removeItem(skey()); } catch {}
-  try { sessionStorage.removeItem(rkey()); sessionStorage.removeItem(idKey()); } catch {}
+  try { sessionStorage.removeItem(rkey()); sessionStorage.removeItem(idKey()); sessionStorage.removeItem(admKey()); } catch {}
   S.messages = []; S.msgIndex.clear(); S.msgNodes.clear();
   S.transfersIn.clear(); S.transfersOut.clear(); S.outFiles.clear();
   S.outQueue = []; S.outBusy = false; S.pendingReads = [];
@@ -1509,7 +1651,7 @@ function wipe(reason){
   document.title = BASE_TITLE;
   if (reason === 'cancel') { resetSession(); showView('landing'); return; }
   const T = $('#ended-title'), P = $('#ended-text');
-  if (reason === 'host-ended') { T.textContent = 'O anfitrião encerrou a conversa'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados deste dispositivo. Nenhum registro ficou em servidores.'; }
+  if (reason === 'host-ended') { T.textContent = 'O admin encerrou a conversa'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados deste dispositivo. Nenhum registro ficou em servidores.'; }
   else if (reason === 'left') { T.textContent = 'Você saiu da conversa'; P.textContent = 'As mensagens, os arquivos e a chave foram apagados deste dispositivo. Os outros participantes continuam conversando.'; }
   else if (reason === 'full') { T.textContent = 'Sala cheia'; P.textContent = 'Esta conversa já tem ' + MAX_MEMBERS + ' pessoas, o máximo permitido. Nada foi guardado neste dispositivo.'; }
   else { T.textContent = 'Conversa encerrada'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados de todos os aparelhos. Não há como recuperar — nenhum registro ficou em servidores.'; }
@@ -1526,17 +1668,30 @@ function openConfirm(title, text, okLabel, onOk){
   $('#btn-confirm-cancel').focus();
 }
 function confirmEnd(){
-  if (S.role === 'host') {
-    openConfirm('Encerrar para todos?',
-      'Mensagens, arquivos e a chave de criptografia serão apagados de todos os aparelhos (até ' + MAX_MEMBERS + ' pessoas), agora. Não há como recuperar.',
-      'Encerrar para todos',
-      async () => { await sendJSON({ t: 'end', secret: S.hostSecret ? b64u(S.hostSecret) : '' }); setTimeout(() => wipe('me'), 200); });
-  } else {
-    openConfirm('Sair da conversa?',
-      'As mensagens e arquivos serão apagados deste aparelho. Os outros continuam conversando. Só o anfitrião pode encerrar para todos.',
-      'Sair da conversa',
-      async () => { await sendJSON({ t: 'leave', final: 1 }); setTimeout(() => wipe('left'), 200); });
+  if (iAmAdmin()) { openAdminMenu(); return; }
+  openConfirm('Sair da conversa?',
+    'As mensagens e arquivos serão apagados deste aparelho. Os outros continuam conversando. Só o admin pode encerrar para todos.',
+    'Sair da conversa', leaveRoom);
+}
+let admModal = null;
+function openAdminMenu(){
+  if (!admModal) {
+    admModal = document.createElement('div'); admModal.className = 'modal'; admModal.hidden = true;
+    admModal.innerHTML = '<div class="modal-card"><h3>Você é o admin</h3><p id="adm-menu-text"></p><div class="modal-actions" style="flex-direction:column;gap:8px">' +
+      '<button id="btn-adm-end" class="btn btn-danger btn-block">Encerrar e apagar para todos</button>' +
+      '<button id="btn-adm-leave" class="btn btn-ghost btn-block">Sair e passar o admin</button>' +
+      '<button id="btn-adm-cancel" class="btn btn-ghost btn-block">Cancelar</button></div></div>';
+    document.body.appendChild(admModal);
+    admModal.querySelector('#btn-adm-end').addEventListener('click', () => { admModal.hidden = true; endForAll(); });
+    admModal.querySelector('#btn-adm-leave').addEventListener('click', () => { admModal.hidden = true; leaveRoom(); });
+    admModal.querySelector('#btn-adm-cancel').addEventListener('click', () => { admModal.hidden = true; });
+    admModal.addEventListener('click', e => { if (e.target === admModal) admModal.hidden = true; });
   }
+  const next = nextInLine();
+  $('#adm-menu-text').textContent = 'Encerrar apaga mensagens, arquivos e a chave de todos os aparelhos, agora. ' +
+    (next ? 'Se só sair, ' + next.name + ' passa a ser o admin.' : 'Se só sair, a sala fica vazia.');
+  admModal.querySelector('#btn-adm-leave').textContent = next ? 'Sair e passar o admin para ' + next.name : 'Sair da conversa';
+  admModal.hidden = false;
 }
 
 /* ───────── lightbox / sidebar / emoji ───────── */
@@ -1583,10 +1738,9 @@ async function createRoom(password){
       S.keyB64 = b64u(await wrapKey(kb, password, salt)); S.saltB64 = b64u(salt); S.hasPassword = true;
     } else { S.keyB64 = b64u(kb); S.saltB64 = null; S.hasPassword = false; }
   } catch { showError('Não foi possível proteger a sala com senha.'); return; }
-  // segredo do anfitrião: só ele consegue provar que pode encerrar para todos (o link leva só o hash)
-  S.hostSecret = rand(16);
-  S.hostTag = b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', S.hostSecret)).slice(0, 16));
-  try { sessionStorage.setItem(rkey(), JSON.stringify({ role: 'host', hs: b64u(S.hostSecret) })); } catch {}
+  // chave de admin: só quem a tem encerra para todos (o link leva só o hash da chave pública)
+  try { await createAdminKey(); await ensureDH(); } catch { showError('Não foi possível gerar as chaves da sala.'); return; }
+  try { sessionStorage.setItem(rkey(), JSON.stringify({ role: 'host' })); } catch {}
   try { S.cryptoKey = await importKey(kb); } catch { showError('Não foi possível gerar a chave de criptografia.'); return; }
   history.replaceState(null, '', hashStr());
   loadIdentity();
@@ -1609,6 +1763,7 @@ async function joinRoom(h, password){
   try { S.cryptoKey = await importKey(kb); } catch { showError('A chave do link é inválida.'); return; }
   $('#modal-pass-join').hidden = true; pendingJoin = null;
   loadIdentity();
+  try { await ensureDH(); await loadAdminKey(); } catch {}
   await restore();
   renderInvite(); renderMe(); renderMembers();
   showView('chat'); setStatus('connecting');
@@ -1843,6 +1998,7 @@ function wireEvents(){
     else if (!$('#modal-diag').hidden) $('#modal-diag').hidden = true;
     else if (!$('#modal-appear').hidden) $('#modal-appear').hidden = true;
     else if (!$('#modal-split').hidden) $('#modal-split').hidden = true;
+    else if (admModal && !admModal.hidden) admModal.hidden = true;
     else if (delModal && !delModal.hidden) { delModal.hidden = true; delTarget = null; }
     else if (reactPop && !reactPop.hidden) closeReactPop();
     else if (!$('#search-bar').hidden) closeSearch();
@@ -1862,7 +2018,7 @@ function wireEvents(){
 }
 
 /* ───────── Névoa+ : resposta, reações, edição, apagar, fixar, busca, voz, diagnóstico, aparência, privacidade ───────── */
-let pendingJoin = null, pendingResume = false, pendingPreview = null, pendingHs = null;
+let pendingJoin = null, pendingResume = false, pendingPreview = null;
 let reactPop = null, reactTarget = null, delModal = null, delTarget = null;
 
 async function deriveWrapKey(password, saltBytes){
@@ -2025,7 +2181,7 @@ function stopRecording(){ if (S.recorder && S.recorder.state === 'recording') { 
 
 function openDiag(){
   const rows = [
-    ['Papel', S.role === 'host' ? 'anfitrião' : S.role === 'guest' ? 'convidado' : '—'], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
+    ['Papel', iAmAdmin() ? 'admin' : S.role ? 'convidado' : '—'], ['Admin da sala', (() => { const a = activeAdminId(); return !a ? 'ninguém no momento' : a === S.myId ? 'você' : memberName(a); })()], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
     ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState],
     ['Participantes', (admittedMembers().length + (S.admitted ? 1 : 0)) + ' de ' + MAX_MEMBERS],
     ['Rota', (() => { const t = admittedMembers().length, d = admittedMembers().filter(m => isDirect(m.id)).length; return t ? d + ' direto (P2P) · ' + (t - d) + ' pelo relay' : '—'; })()],
@@ -2111,7 +2267,7 @@ function submitPassJoin(){
   $('#pass-join-input').value = '';
   const h = pendingJoin;
   if (!h) { $('#modal-pass-join').hidden = true; return; }
-  if (pendingResume) resumeHost(h, pw, pendingHs); else joinRoom(h, pw);
+  if (pendingResume) resumeHost(h, pw); else joinRoom(h, pw);
 }
 function submitPassCreate(){
   const p1 = $('#pass-create-input').value, p2 = $('#pass-create-confirm').value;
@@ -2163,9 +2319,8 @@ function jumpToMessage(id){
 }
 
 /* ───────── boot ───────── */
-async function resumeHost(h, password, hs){
+async function resumeHost(h, password){
   S.role = 'host'; S.roomId = h.r; S.createdAt = Date.now(); S.hostTag = h.h || null;
-  if (hs) { try { S.hostSecret = ub64(hs); } catch {} }
   let kb;
   if (h.s) {
     if (!password) { pendingJoin = h; pendingResume = true; $('#pass-join-error').hidden = true; $('#modal-pass-join').hidden = false; setTimeout(() => $('#pass-join-input').focus(), 50); return; }
@@ -2177,6 +2332,7 @@ async function resumeHost(h, password, hs){
   try { S.cryptoKey = await importKey(kb); } catch { showError('A chave do link é inválida.'); return; }
   $('#modal-pass-join').hidden = true; pendingJoin = null; pendingResume = false;
   loadIdentity();
+  try { await ensureDH(); await loadAdminKey(); } catch {}
   await restore();
   history.replaceState(null, '', hashStr());
   renderInvite(); renderMe(); renderMembers();
@@ -2210,11 +2366,13 @@ async function boot(){
     }
     let saved = null;
     try { const raw = sessionStorage.getItem(rkey(h.r)); saved = raw === 'host' ? { role: 'host' } : JSON.parse(raw || 'null'); } catch {}
-    if (saved && saved.role === 'host') { pendingHs = saved.hs || null; await resumeHost(h, undefined, pendingHs); }
+    if (saved && saved.role === 'host') await resumeHost(h);
     else showInvitePreview(h);
   } else showView('landing');
 }
-if (IS_DEV) window.__nevoa = { S, R, sendJSON, directPeers };   // só em localhost, para os testes automáticos
+if (IS_DEV) window.__nevoa = { S, R, sendJSON, directPeers, iAmAdmin, activeAdminId };   // só em localhost, para os testes automáticos
+// página restaurada do cache de voltar/avançar: ela já disse "saí" ao sair, então volta com outra identificação de página
+addEventListener('pageshow', e => { if (e.persisted && R.on && !S.ended) { S.bootId = hex(rand(4)); S.helloSeq = 0; kickLinks(); announce(false, true); } });
 addEventListener('pagehide', () => { try { if (S.leaveFrame && R.on) netSend(S.leaveFrame); } catch {} });
 boot();
 })();

@@ -11,7 +11,7 @@ Site: https://lebot007.github.io/nevoa-chat/
 2. Clique em "Criar conversa privada" — o link é copiado automaticamente.
 3. Envie o link pelo WhatsApp ou Telegram (botões prontos na tela), ou copie.
 4. Até 9 pessoas abrem o link (10 no total, contando você) e entram sozinhas na conversa.
-5. Mantenha a aba aberta enquanto conversam. Só o anfitrião encerra para todos ("Encerrar e apagar para todos"); os outros podem "Sair da conversa" a qualquer momento.
+5. Mantenha a aba aberta enquanto conversam. Quem cria a sala é o admin: só o admin encerra para todos. Se ele sai, o admin passa automaticamente para o próximo da conversa (quem entrou primeiro), e assim por diante. Qualquer um pode "Sair da conversa" a qualquer momento.
 
 Não é preciso rodar servidor local, abrir terminal, configurar rede ou instalar qualquer coisa. As instruções de localhost abaixo são apenas para desenvolvedores que queiram editar o código.
 
@@ -19,7 +19,7 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 
 ## Como funciona
 
-- O anfitrião cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
+- Quem cria a sala vira o admin; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
 - Cada sala é um canal em brokers MQTT públicos (EMQX, HiveMQ, Eclipse, TBMQ, Mosquitto) via WebSocket seguro. Todos publicam e recebem no mesmo canal — é um grupão, todos falam com todos. Os brokers só repassam bytes já cifrados e não armazenam nada.
 - Os 5 brokers funcionam em paralelo; dois usam a porta 443 (a mesma do HTTPS), que passa por VPN e firewall corporativo. Se um cai ou é bloqueado na rede de alguém, os outros seguem.
 - **Conexão direta (P2P) quando a rede deixa:** os navegadores combinam um WebRTC entre si pelo próprio canal cifrado. Cada mensagem vai pelo P2P e pelo relay; quem recebe fica com a primeira cópia. Na mesma cidade isso costuma ser dezenas de ms em vez de centenas. Em 4G/CGNAT ou VPN, onde o P2P não abre, tudo segue pelo relay.
@@ -27,7 +27,7 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 - **Reconexão automática:** conexão que trava sem fechar (troca de Wi-Fi para 4G, celular que dormiu) é detectada em ~15 s e refeita; ao voltar para a aba, o site confere tudo na hora.
 - O remetente de cada quadro é autenticado junto com a cifra (AES-GCM com dados associados): sem a chave ninguém forja mensagens.
 - Limite de 10 pessoas: quem chega espera ~3 s as apresentações; se já houver 10, recebe "Sala cheia". A ordem de chegada decide, igual para todos.
-- Se o anfitrião fechar a aba, os outros continuam conversando. Só ele pode encerrar para todos: o link carrega apenas o hash de um segredo que fica no navegador dele.
+- **Admin transferível:** quem cria a sala gera uma chave de assinatura (ECDSA P-256); o link leva só o hash da chave pública. Só um "encerrar" assinado por essa chave apaga a conversa de todos, e o admin prova o posto assinando seus "olás". O admin entrega uma cópia da chave ao próximo da fila, cifrada só para ele (ECDH) — assim, se o admin sai (até fechando a aba de repente), o próximo assume na hora; e assim por diante. Se o admin original volta, retoma o posto. O admin também pode "Sair e passar o admin".
 - Qualquer participante pode apagar qualquer mensagem para todos; editar, só o autor.
 
 ## Recursos
