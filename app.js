@@ -15,8 +15,8 @@ const PEER_URLS = [
   'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js'
 ];
 const QR_URLS = [
-  'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js',
-  'https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js'
+  'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
+  'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js'
 ];
 const PEER_OPTS = {
   host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
@@ -823,12 +823,23 @@ function renderInvite(){
   if (S.qrLib) drawQRs();
 }
 function drawQRs(){
-  if (!window.QRCode || !S.roomId) return;
+  if (typeof window.qrcode !== 'function' || !S.roomId) return;
   const l = inviteLink();
   [['#qr-waiting', 180], ['#qr-side', 140]].forEach(([sel, size]) => {
     const c = $(sel);
-    QRCode.toCanvas(c, l, { width: size, margin: 1, color: { dark: '#12102A', light: '#F2EFFF' } },
-      err => { if (err) { const w = c.closest('.qr-card,.qr-wrap'); if (w) w.hidden = true; } });
+    try {
+      const qr = window.qrcode(0, 'L');
+      qr.addData(l); qr.make();
+      const n = qr.getModuleCount(), margin = 2;
+      const cell = Math.max(2, Math.floor(size / (n + margin * 2)));
+      const dim = cell * (n + margin * 2);
+      c.width = dim; c.height = dim;
+      const x = c.getContext('2d');
+      x.fillStyle = '#F2EFFF'; x.fillRect(0, 0, dim, dim);
+      x.fillStyle = '#12102A';
+      for (let r = 0; r < n; r++) for (let col = 0; col < n; col++)
+        if (qr.isDark(r, col)) x.fillRect((col + margin) * cell, (r + margin) * cell, cell, cell);
+    } catch { const w = c.closest('.qr-card,.qr-wrap'); if (w) w.hidden = true; }
   });
 }
 async function copyLink(){
