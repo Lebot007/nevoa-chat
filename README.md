@@ -55,7 +55,7 @@ Use token classic com escopo repo e revogue depois em https://github.com/setting
 
 ## Privacidade
 
-O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. Em redes restritivas um relay TURN público pode retransmitir tráfego, sempre cifrado. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
+O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. A descoberta de rota usa STUN público; em redes com NAT simétrico pode ser necessário configurar um relay TURN próprio no código (o tráfego segue cifrado ponta a ponta). Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
 
 ## Licença
 

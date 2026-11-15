@@ -21,16 +21,16 @@ const QR_URLS = [
 const PEER_OPTS = {
   host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
   config: { iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
-    { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'],
-      username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }
+    // NAT simétrico/firewall restritivo: adicione um TURN próprio, ex.:
+    // { urls: ['turn:SEU_HOST:3478', 'turn:SEU_HOST:443?transport=tcp'], username: '...', credential: '...' }
   ]}
 };
 const ANIMALS = ['Corvo','Raposa','Lince','Garça','Orca','Falcão','Jaguar','Coruja','Lobo','Axolote','Pantera','Grou'];
 const ADJS = ['Âmbar','Cobalto','Carmim','Violeta','Grafite','Turquesa','Escarlate','Índigo','Dourado','Prateado','Obsidiana','Ciano'];
 const AV = [['#7C5CFF','#B44DFF'],['#35E0E6','#2E7CFF'],['#FF4D9E','#FF8A5C'],['#3DDC97','#35E0E6'],
             ['#FFB020','#FF5468'],['#55A6FF','#7C5CFF'],['#C24DFF','#FF4D9E'],['#2ECCB0','#7CE05C']];
-const EMOJIS = ['😀','😄','😂','🙂','😉','😍','😘','🤔','😎','🥳','😢','😡','👍','','🙏','','💪','','✨','❤️','💜','💙','🎉','🎁','☕','🍕','','🌙','️','👀','🤝','✅','❌','⏳','🔒','🎵','🚀','😴','🤯','😅','🙃','😇','🤫','🫶','💡','⚡','️','📎','🗑️'];
+const EMOJIS = ['😀','😄','😂','🙂','😉','😍','😘','🤔','😎','🥳','😢','😡','👍','👎','🙏','😭','💪','🔥','✨','❤️','💜','💙','🎉','🎁','☕','🍕','🎂','🌙','⭐','👀','🤝','✅','❌','⏳','🔒','🎵','🚀','😴','🤯','😅','🙃','😇','🤫','🫶','💡','⚡','🌈','📎','🗑️'];
 
 /* ───────── utilitários ───────── */
 const $ = s => document.querySelector(s);
@@ -277,6 +277,7 @@ async function onData(raw){
 
 /* ───────── persistência local cifrada ───────── */
 const skey = () => 'nevoa:v1:' + S.roomId;
+const rkey = (id) => 'nevoa:role:' + (id || S.roomId);
 function buildPayload(){
   return {
     v: 1, createdAt: S.createdAt, me: S.me, peer: S.peerProfile, greeted: S.greeted,
@@ -375,7 +376,7 @@ function initHost(attempt){
   p.on('open', () => { if (!S.ended && !S.connected) setStatus(S.view === 'waiting' ? 'waiting' : 'waitreturn'); });
   p.on('connection', c => {
     if (S.ended) { try { c.close(); } catch {} return; }
-    if (S.conn && S.conn.open) {           // sala cheia: só dois
+    if (S.conn && S.conn.open && !S.wasConnected) {   // sala cheia: só dois (reconexão não conta)
       c.on('open', async () => {
         try { const f = await makeFrame(1, te.encode(JSON.stringify({ t: 'full' }))); c.send(f.buffer); } catch {}
         setTimeout(() => { try { c.close(); } catch {} }, 400);
@@ -523,7 +524,10 @@ function handle(o){
       break;
     }
     case 'bye': wipe('peer'); break;
-    case 'full': wipe('full'); break;
+    case 'full':
+      if (S.wasConnected) { try { if (S.conn) S.conn.close(); } catch {} }  // corrida de reconexão: tenta de novo
+      else wipe('full');
+      break;
   }
 }
 
@@ -960,6 +964,7 @@ function wipe(reason){
   S.conn = null; S.peer = null; S.connected = false; S.peerTyping = false;
   S.messages.forEach(m => { if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch {} } });
   try { localStorage.removeItem(skey()); } catch {}
+  try { sessionStorage.removeItem(rkey()); } catch {}
   S.messages = []; S.msgIndex.clear(); S.msgNodes.clear();
   S.transfersIn.clear(); S.transfersOut.clear(); S.outFiles.clear();
   S.outQueue = []; S.outBusy = false; S.pendingReads = [];
@@ -1027,6 +1032,7 @@ async function createRoom(){
   if (S.roomId) return;
   const kb = rand(32);
   S.role = 'host'; S.roomId = hex(rand(12)); S.keyB64 = b64u(kb); S.createdAt = Date.now();
+  try { sessionStorage.setItem(rkey(), 'host'); } catch {}
   try { S.cryptoKey = await importKey(kb); } catch { showError('Não foi possível gerar a chave de criptografia.'); return; }
   history.replaceState(null, '', '#r=' + S.roomId + '&k=' + S.keyB64);
   await restore();
@@ -1232,6 +1238,18 @@ function wireEvents(){
 }
 
 /* ───────── boot ───────── */
+async function resumeHost(h){
+  S.role = 'host'; S.roomId = h.r; S.keyB64 = h.k; S.createdAt = Date.now();
+  try { S.cryptoKey = await importKey(ub64(h.k)); } catch { showError('A chave do link é inválida.'); return; }
+  await restore();
+  history.replaceState(null, '', '#r=' + S.roomId + '&k=' + S.keyB64);
+  renderInvite(); renderMe(); renderPeer();
+  const had = S.messages.length > 0;
+  showView(had ? 'chat' : 'waiting');
+  setStatus(had ? 'waitreturn' : 'waiting');
+  initHost(0);
+}
+
 async function boot(){
   wireEvents(); buildEmoji(); initFx(); initReveal();
   $('#year').textContent = new Date().getFullYear();
@@ -1256,7 +1274,10 @@ async function boot(){
       showView('landing');
       return;
     }
-    await joinRoom(h);
+    let role = null;
+    try { role = sessionStorage.getItem(rkey(h.r)); } catch {}
+    if (role === 'host') await resumeHost(h);
+    else await joinRoom(h);
   } else showView('landing');
 }
 boot();

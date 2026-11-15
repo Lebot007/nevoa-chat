@@ -7,7 +7,7 @@ import path from 'node:path';
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = process.env.GITHUB_TOKEN || process.argv[2] || '';
 const REPO = process.env.REPO_NAME || 'nevoa-chat';
-const AUTHOR = { name: 'Lebot007', email: 'Lebot007@users.noreply.github.com' };
+const AUTHOR = { name: 'Lebot007', email: '135986213+Lebot007@users.noreply.github.com' };
 const FILES = ['index.html', 'styles.css', 'app.js', 'LICENSE', 'README.md', '.nojekyll', 'deploy.mjs'];
 
 if (!TOKEN) {
@@ -67,11 +67,12 @@ const main = async () => {
   }
 
   const tr = await api('POST', `/repos/${login}/${REPO}/git/trees`, { tree });
+  const head = await api('GET', `/repos/${login}/${REPO}/git/ref/heads/main`, null, [404]);
   const commit = await api('POST', `/repos/${login}/${REPO}/git/commits`, {
     message: 'feat: Névoa — chat anônimo P2P efêmero (MIT)',
-    tree: tr.data.sha, parents: [], author: AUTHOR, committer: AUTHOR
+    tree: tr.data.sha, parents: head.status === 404 ? [] : [head.data.object.sha], author: AUTHOR, committer: AUTHOR
   });
-  await api('PATCH', `/repos/${login}/${REPO}/git/refs/heads/main`, { sha: commit.data.sha, force: true });
+  await api('PATCH', `/repos/${login}/${REPO}/git/refs/heads/main`, { sha: commit.data.sha, force: false });
   console.log(`Commit ${commit.data.sha.slice(0, 7)} na main como ${AUTHOR.name}`);
 
   let pages = await api('POST', `/repos/${login}/${REPO}/pages`,
