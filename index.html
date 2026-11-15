@@ -25,6 +25,12 @@
 <div class="bg-aurora" aria-hidden="true"><i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i></div>
 <canvas id="fx" aria-hidden="true"></canvas>
 <div class="grain" aria-hidden="true"></div>
+<div id="fog-veil" class="fog-veil" aria-hidden="true"></div>
+<div id="privacy-shield" class="privacy-shield" aria-hidden="true">
+  <svg class="ps-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+  <strong>Conteúdo oculto por privacidade</strong>
+  <span>Volte para esta janela para ver a conversa.</span>
+</div>
 
 <header class="topbar">
   <div class="brand">
@@ -58,6 +64,7 @@
       <div class="cta-row reveal d3">
         <button id="btn-create" class="btn btn-primary btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Criar conversa privada</button>
         <a href="#como" class="btn btn-ghost btn-lg">Como funciona</a>
+        <button id="btn-create-pass" class="btn btn-ghost btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Criar com senha</button>
         <button id="btn-join-paste" class="btn btn-ghost btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>Tenho um convite</button>
       </div>
       <p class="hero-note reveal d4">Grátis · Sem instalar nada · Celular e computador · Arquivos até 8 MB</p>
@@ -158,6 +165,13 @@
       <div class="participant"><span id="peer-avatar" class="avatar avatar-ghost">?</span><div class="p-info"><span id="peer-name" class="p-name">—</span><span class="p-role" id="peer-role">aguardando</span></div><span id="peer-status" class="dot dot-off"></span></div>
     </div>
     <div class="side-card sec-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5.5v5.6c0 5 3.4 8.6 8 10.9 4.6-2.3 8-5.9 8-10.9V5.5z"/><path d="m9 12 2 2 4-4.5"/></svg><div><strong>AES-256-GCM · WebRTC</strong><p>Mensagens cifradas no seu navegador. Nada é gravado em servidores.</p></div></div>
+    <div class="side-invite-actions">
+      <button id="btn-appear" class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18c1.5 0 2-1 2-2s-.5-2 1-2h2a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="8" cy="10" r="1"/><circle cx="12" cy="7" r="1"/><circle cx="16" cy="10" r="1"/></svg>Aparência</button>
+      <button id="btn-diag-side" class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>Diagnóstico</button>
+    </div>
+    <div class="side-invite-actions">
+      <button id="btn-split" class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>Código e chave separados</button>
+    </div>
     <button id="btn-end" class="btn btn-danger btn-block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>Encerrar e apagar tudo</button>
   </aside>
 
@@ -167,11 +181,26 @@
       <span id="peer-avatar-h" class="avatar avatar-ghost">?</span>
       <div class="ch-info"><span id="peer-name-h" class="ch-name">Aguardando…</span><span id="peer-status-h" class="ch-status">conectando…</span></div>
       <span id="latency" class="latency" hidden></span>
+      <span id="quality-badge" class="quality-badge" data-q="good" hidden><span class="qb-dot"></span><span id="quality-text">boa</span></span>
+      <button id="btn-search" class="icon-btn" aria-label="Buscar na conversa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+      <button id="btn-sound-chat" class="icon-btn" aria-label="Ativar ou desativar sons"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+      <button id="btn-diag" class="icon-btn" aria-label="Diagnóstico da conexão"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg></button>
       <button id="btn-end-top" class="icon-btn danger" aria-label="Encerrar conversa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button>
     </header>
     <div id="conn-help" class="conn-help" hidden>
       <div class="conn-help-copy"><strong id="conn-help-title">Conectando automaticamente…</strong><p id="conn-help-text">Estamos localizando o outro navegador. Mantenha esta aba aberta.</p></div>
       <button id="btn-retry-now" class="btn btn-ghost btn-sm">Tentar agora</button>
+    </div>
+    <div id="search-bar" class="search-bar" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search-input" type="search" placeholder="Buscar nesta conversa…" aria-label="Buscar mensagens">
+      <span id="search-count" class="search-count"></span>
+      <button id="btn-search-close" class="icon-btn sm" aria-label="Fechar busca"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div id="pinned-banner" class="pinned-banner" hidden>
+      <svg class="pb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l1 7 2.5 2.5H5.5L8 10z"/></svg>
+      <div class="pb-copy"><span class="pb-label">Mensagem fixada</span><span id="pinned-text" class="pb-text"></span></div>
+      <button id="btn-unpin" class="icon-btn sm" aria-label="Desafixar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div id="msg-scroll" class="msg-scroll">
       <div id="empty-state" class="empty-state">
@@ -182,6 +211,10 @@
     </div>
     <button id="scroll-pill" class="scroll-pill" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></svg><span id="scroll-pill-n">novas mensagens</span></button>
     <div id="drop-overlay" class="drop-overlay" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0 5 5m-5-5L7 9"/><path d="M4 20h16"/></svg><p>Solte para enviar</p><span>imagens e arquivos até 8 MB</span></div>
+    <div id="reply-bar" class="reply-bar" hidden>
+      <div class="rb-copy"><span class="rb-label" id="reply-label">Respondendo</span><span class="rb-text" id="reply-text"></span></div>
+      <button id="btn-reply-cancel" class="icon-btn sm" aria-label="Cancelar resposta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
     <footer class="composer">
       <button id="btn-attach" class="icon-btn" aria-label="Enviar arquivo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 12-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8L13 4.5a3.7 3.7 0 0 1 5.2 5.2L10 17.9a1.8 1.8 0 0 1-2.6-2.6L15 7.7"/></svg></button>
       <input type="file" id="file-input" multiple hidden>
@@ -190,6 +223,8 @@
         <span id="char-count" class="char-count" hidden></span>
       </div>
       <button id="btn-emoji" class="icon-btn" aria-label="Emojis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg></button>
+      <button id="btn-mic" class="icon-btn btn-mic" aria-label="Gravar mensagem de voz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg></button>
+      <span id="rec-indicator" class="rec-indicator"><span class="rec-dot"></span><span id="rec-time">0:00</span></span>
       <button id="btn-send" class="btn-send" aria-label="Enviar" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-11 11"/><path d="M22 2 15 22l-4-9-9-4z"/></svg></button>
       <div id="emoji-pop" class="emoji-pop" hidden></div>
     </footer>
@@ -223,6 +258,52 @@
 <div id="modal-name" class="modal" hidden><div class="modal-card"><h3>Seu apelido</h3><p>Um nome aleatório protege sua identidade. Troque se quiser.</p><input id="name-input" class="text-input" maxlength="24" autocomplete="off"><div class="modal-actions"><button id="btn-name-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-name-save" class="btn btn-primary">Salvar</button></div></div></div>
 <div id="lightbox" class="lightbox" hidden><button id="lightbox-close" class="icon-btn lb-close" aria-label="Fechar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><img id="lightbox-img" alt=""><a id="lightbox-download" class="btn btn-primary lb-dl" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 20h14"/></svg>Baixar</a></div>
 <div id="modal-join" class="modal" hidden><div class="modal-card"><h3>Entrar com um convite</h3><p>Cole o link completo que você recebeu. A conexão começa automaticamente.</p><textarea id="join-input" class="text-input join-textarea" rows="3" placeholder="Cole o link do convite aqui…"></textarea><div class="join-error" id="join-error" hidden></div><div class="modal-actions"><button id="btn-join-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-join-go" class="btn btn-primary">Entrar automaticamente</button></div></div></div>
+<div id="modal-preview" class="modal" hidden><div class="modal-card">
+  <h3>Convite para sala privada</h3>
+  <p>Alguém compartilhou este convite com você. Confira antes de entrar.</p>
+  <div class="preview-room">
+    <span class="pv-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+    <div><div class="pv-id" id="preview-id"></div><div class="pv-sub">Sala anônima · só duas pessoas</div><span class="pv-lock" id="preview-lock" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Protegida por senha</span></div>
+  </div>
+  <div class="modal-actions"><button id="btn-preview-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-preview-go" class="btn btn-primary">Entrar na sala</button></div>
+</div></div>
+<div id="modal-pass-create" class="modal" hidden><div class="modal-card">
+  <h3>Criar sala protegida por senha</h3>
+  <p>Além do link, a outra pessoa vai precisar desta senha. Combine-a por outro canal (voz, presencial). A senha nunca sai do seu navegador.</p>
+  <input id="pass-create-input" class="text-input" type="password" maxlength="64" placeholder="Senha da sala" autocomplete="new-password">
+  <input id="pass-create-confirm" class="text-input" type="password" maxlength="64" placeholder="Repita a senha" autocomplete="new-password" style="margin-top:8px">
+  <div class="join-error" id="pass-create-error" hidden></div>
+  <div class="modal-actions"><button id="btn-pass-create-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-pass-create-go" class="btn btn-primary">Criar sala protegida</button></div>
+</div></div>
+<div id="modal-pass-join" class="modal" hidden><div class="modal-card">
+  <h3>Sala protegida por senha</h3>
+  <p>Este convite exige uma senha. Peça ao anfitrião por outro canal.</p>
+  <input id="pass-join-input" class="text-input" type="password" maxlength="64" placeholder="Senha da sala" autocomplete="current-password">
+  <div class="join-error" id="pass-join-error" hidden></div>
+  <div class="modal-actions"><button id="btn-pass-join-cancel" class="btn btn-ghost">Cancelar</button><button id="btn-pass-join-go" class="btn btn-primary">Entrar</button></div>
+</div></div>
+<div id="modal-diag" class="modal" hidden><div class="modal-card">
+  <h3>Diagnóstico da conexão</h3>
+  <dl class="diag-grid" id="diag-grid"></dl>
+  <p style="font-size:12px;color:var(--muted)">Se a conexão não fecha, pode ser NAT simétrico ou firewall. Um relay TURN próprio resolve — veja o README.</p>
+  <div class="modal-actions"><button id="btn-diag-close" class="btn btn-primary">Fechar</button></div>
+</div></div>
+<div id="modal-appear" class="modal" hidden><div class="modal-card">
+  <h3>Aparência e privacidade</h3>
+  <div class="appear-themes" id="appear-themes"></div>
+  <div class="appear-row"><span>Cor de destaque</span><input type="color" id="appear-color" value="#8B7CFF"></div>
+  <div class="appear-swatches" id="appear-swatches"></div>
+  <div class="appear-row"><span>Ocultar conversa ao sair da janela</span><label class="switch"><input type="checkbox" id="appear-blur" checked><span class="sl"></span></label></div>
+  <p style="font-size:12px;color:var(--muted)">O borrão é visual: não impede captura de tela por quem já está na janela.</p>
+  <div class="modal-actions"><button id="btn-appear-close" class="btn btn-primary">Pronto</button></div>
+</div></div>
+<div id="modal-split" class="modal" hidden><div class="modal-card">
+  <h3>Código e chave separados</h3>
+  <p>Envie o código da sala por um canal e a chave por outro. Quem tiver os dois entra.</p>
+  <div class="appear-row"><span class="mono" id="split-room" style="font-size:12px"></span><button id="btn-split-room" class="btn btn-ghost btn-sm">Copiar código</button></div>
+  <div class="appear-row"><span class="mono" id="split-key" style="font-size:12px;word-break:break-all"></span><button id="btn-split-key" class="btn btn-ghost btn-sm">Copiar chave</button></div>
+  <div class="modal-actions"><button id="btn-split-close" class="btn btn-primary">Fechar</button></div>
+</div></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>
