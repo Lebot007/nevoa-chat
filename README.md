@@ -21,6 +21,7 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 
 - O usuário 1 cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
 - O usuário 2 abre o link; os navegadores se encontram pelo broker público (PeerJS Cloud) e abrem um canal WebRTC P2P.
+- Se a conexão direta não fecha em 6 s (CGNAT, NAT simétrico, VPN, firewall), a conversa passa sozinha para uma rota de reserva: os mesmos quadros cifrados trafegam por brokers MQTT públicos via WebSocket. O status mostra "· relay".
 - Mensagens e arquivos são cifrados ponta a ponta antes de sair do navegador. Nenhum servidor guarda conteúdo.
 - Encerrar apaga mensagens, arquivos da RAM, histórico local cifrado e a chave, nos dois dispositivos.
 
@@ -56,7 +57,7 @@ Use token classic com escopo repo e revogue depois em https://github.com/setting
 
 ## Privacidade
 
-O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. A descoberta de rota usa STUN público e, quando a conexão direta não fecha (CGNAT, 4G, NAT simétrico), cai no relay TURN público do PeerJS — o relay só repassa bytes já cifrados ponta a ponta. Para mais robustez é possível configurar um TURN próprio no código. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
+O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. A descoberta de rota usa STUN público e, quando a conexão direta não fecha (CGNAT, 4G, NAT simétrico), cai no relay TURN público do PeerJS — o relay só repassa bytes já cifrados ponta a ponta. Se nem assim houver rota, entra o relay de reserva (brokers MQTT públicos: EMQX, HiveMQ, Eclipse, Mosquitto), que vê IPs e bytes cifrados, nunca a chave nem o conteúdo. Para testar essa rota, abra o site com `?relay=1` nos dois lados. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
 
 ## Licença
 

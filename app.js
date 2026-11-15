@@ -227,7 +227,7 @@ function renderPeer(){
 function refreshStatus(){
   const on = S.connected;
   let txt, cls;
-  if (on) { txt = S.peerTyping ? 'digitando' : (S.peerPresence === 'away' ? 'ausente · criptografado' : 'online · criptografado'); cls = 'on'; }
+  if (on) { txt = S.peerTyping ? 'digitando' : (S.peerPresence === 'away' ? 'ausente · criptografado' : 'online · criptografado') + ((S.conn && S.conn.relay && !S.peerTyping) ? ' · relay' : ''); cls = 'on'; }
   else {
     const map = { waiting:['aguardando convite…','warn'], connecting:['conectando…','warn'], handshake:['trocando chaves…','warn'],
       retry:['reconectando…','warn'], 'host-offline':['aguardando anfitrião…','warn'], signal:['reconectando ao sinal…','warn'],
@@ -401,6 +401,170 @@ function attachConn(c){
   c.on('error', () => {});
 }
 
+/* ───────── rota de reserva: relay cifrado (MQTT público sobre WebSocket) ─────────
+   Quando o P2P não fecha (NAT simétrico, CGNAT dos dois lados, VPN, firewall), os dois
+   navegadores trocam os MESMOS quadros AES-256-GCM por um broker público. O broker só
+   vê bytes cifrados; a chave continua apenas no link. */
+const RELAY_URLS = [
+  'wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt',
+  'wss://mqtt.eclipseprojects.io/mqtt', 'wss://test.mosquitto.org:8081/mqtt'
+];
+const FORCE_RELAY = /[?&]relay=1/.test(location.search);   // teste: pula o P2P
+const RELAY_AFTER = FORCE_RELAY ? 0 : 6000;                // espera o P2P por 6 s antes de usar o relay
+const R = { on: false, gen: 0, links: [], sid: null, sub: '', pub: '', tick: 0, needSince: 0 };
+
+function mqttPacket(head, ...parts){
+  let len = 0; parts.forEach(p => { len += p.length; });
+  const h = [head]; let n = len;
+  do { let b = n % 128; n = Math.floor(n / 128); if (n > 0) b |= 128; h.push(b); } while (n > 0);
+  const out = new Uint8Array(h.length + len); out.set(h, 0);
+  let o = h.length; parts.forEach(p => { out.set(p, o); o += p.length; });
+  return out;
+}
+const mqttStr = str => { const b = te.encode(str); const o = new Uint8Array(2 + b.length); o[0] = b.length >> 8; o[1] = b.length & 255; o.set(b, 2); return o; };
+
+function relayLink(url, gen){
+  const L = { url, ws: null, ready: false, dead: false, ka: 0, buf: new Uint8Array(0) };
+  const retry = () => { if (!L.dead && R.gen === gen) setTimeout(open, 4000 + Math.random() * 2000); };
+  function packet(first, body){
+    const type = first >> 4, ws = L.ws;
+    if (type === 2) {                                   // CONNACK
+      if (body[1] !== 0) { try { ws.close(); } catch {} return; }
+      ws.send(mqttPacket(0x82, [0, 1], mqttStr(R.sub), [0]));
+    } else if (type === 9) {                            // SUBACK
+      L.ready = true;
+      clearInterval(L.ka);
+      L.ka = setInterval(() => { try { if (ws.readyState === 1) ws.send(new Uint8Array([0xC0, 0])); } catch {} }, 20000);
+    } else if (type === 3) {                            // PUBLISH
+      if (body.length < 2) return;
+      let p = 2 + ((body[0] << 8) | body[1]);
+      if ((first >> 1) & 3) p += 2;
+      if (p <= body.length) relayIn(L, body.slice(p));
+    }
+  }
+  function feed(chunk){
+    const b = new Uint8Array(L.buf.length + chunk.length); b.set(L.buf, 0); b.set(chunk, L.buf.length); L.buf = b;
+    for (;;) {
+      const buf = L.buf;
+      if (buf.length < 2) return;
+      let mul = 1, len = 0, i = 1, x;
+      do { if (i >= buf.length) return; x = buf[i++]; len += (x & 127) * mul; mul *= 128; } while ((x & 128) && i < 5);
+      if (buf.length < i + len) return;
+      const first = buf[0], body = buf.subarray(i, i + len);
+      L.buf = buf.slice(i + len);
+      try { packet(first, body); } catch {}
+    }
+  }
+  function open(){
+    if (L.dead || R.gen !== gen) return;
+    let ws;
+    try { ws = new WebSocket(url, 'mqtt'); } catch { retry(); return; }
+    ws.binaryType = 'arraybuffer'; L.ws = ws; L.buf = new Uint8Array(0);
+    ws.onopen = () => { try { ws.send(mqttPacket(0x10, mqttStr('MQTT'), [4, 2, 0, 60], mqttStr('nv' + uid() + uid().slice(0, 4)))); } catch {} };
+    ws.onmessage = e => { if (e.data instanceof ArrayBuffer) feed(new Uint8Array(e.data)); };
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      if (L.ws !== ws) return;
+      L.ready = false; clearInterval(L.ka);
+      const c = S.conn;
+      if (c && c.relay && c.link === L) c.drop();
+      retry();
+    };
+  }
+  L.pub = payload => { try { if (L.ready && L.ws.readyState === 1) { L.ws.send(mqttPacket(0x30, mqttStr(R.pub), payload)); return true; } } catch {} return false; };
+  L.close = () => { L.dead = true; clearInterval(L.ka); try { L.ws.close(); } catch {} };
+  open();
+  return L;
+}
+
+/* quadro do relay: [tipo 1][sessão 8][corpo] — 1 SYN · 2 ACK · 3 DADOS · 4 TCHAU (controle vai cifrado e com hora) */
+async function relayCtl(type, sid){
+  const body = await makeFrame(1, te.encode(JSON.stringify({ t: 'relay', ts: Date.now() })));
+  const f = new Uint8Array(9 + body.length); f[0] = type; f.set(sid, 1); f.set(body, 9);
+  return f;
+}
+async function relayCtlOk(body){
+  if (body.length < 14 || !S.cryptoKey) return false;
+  try {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: body.slice(1, 13) }, S.cryptoKey, body.slice(13));
+    const o = JSON.parse(td.decode(new Uint8Array(pt)));
+    return o && o.t === 'relay' && Math.abs(Date.now() - Number(o.ts)) < 180000;
+  } catch { return false; }
+}
+function relayConn(L, sid){
+  const h = {}; let wd = 0;
+  const c = {
+    relay: true, open: true, link: L, sidHex: hex(sid),
+    on(e, f){ (h[e] = h[e] || []).push(f); },
+    emit(e, a){ (h[e] || []).slice().forEach(f => { try { f(a); } catch {} }); },
+    send(buf){
+      if (!c.open) return;
+      const u = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      const f = new Uint8Array(9 + u.length); f[0] = 3; f.set(sid, 1); f.set(u, 9);
+      L.pub(f);
+    },
+    // abas em segundo plano têm timers atrasados (até 1/min): a folga precisa cobrir isso
+    touch(){ clearTimeout(wd); wd = setTimeout(() => c.drop(), 75000); },
+    drop(){ if (!c.open) return; c.open = false; clearTimeout(wd); c.emit('close'); },
+    close(){ if (!c.open) return; relayCtl(4, sid).then(f => L.pub(f)).catch(() => {}); c.drop(); },
+    get bufferedAmount(){ return L.ws ? L.ws.bufferedAmount : 0; }
+  };
+  c.touch();
+  return c;
+}
+async function relayIn(L, d){
+  if (!R.on || S.ended || d.length < 9) return;
+  const type = d[0], sid = d.slice(1, 9), sidHex = hex(sid), body = d.subarray(9);
+  if (type === 3) {
+    const c = S.conn;
+    if (c && c.relay && c.open && c.link === L && c.sidHex === sidHex) { c.touch(); c.emit('data', body); }
+    return;
+  }
+  if (S.role === 'guest' && sidHex !== hex(R.sid)) return;
+  if (!(await relayCtlOk(body))) return;
+  const ack = (S.role === 'host' && type === 1) ? await relayCtl(2, sid) : null;
+  if (!R.on || S.ended) return;
+  const c = S.conn && S.conn.relay ? S.conn : null;       // relido depois dos awaits
+  if (type === 4) { if (c && c.sidHex === sidHex) c.drop(); return; }
+  if (S.role === 'host' && type === 1) {
+    if (c && c.open && c.sidHex === sidHex) { if (c.link === L) L.pub(ack); return; }   // ACK perdido: repete
+    const live = S.conn && S.conn.open && S.connected && Date.now() - (S.lastContact || 0) < 15000;
+    if (live) return;                                    // sala ocupada por conexão viva
+    const rc = relayConn(L, sid);
+    attachConn(rc); L.pub(ack); rc.emit('open');
+  } else if (S.role === 'guest' && type === 2) {
+    if (S.conn && S.conn.open) return;
+    const rc = relayConn(L, R.sid);
+    attachConn(rc); rc.emit('open');
+  }
+}
+function relayTick(){
+  if (!R.on || S.ended || S.role !== 'guest') return;
+  if (S.conn && S.conn.open) { R.needSince = 0; return; }
+  if (!R.needSince) R.needSince = Date.now();
+  if (Date.now() - R.needSince < RELAY_AFTER) return;
+  relayCtl(1, R.sid).then(f => { R.links.forEach(l => l.pub(f)); }).catch(() => {});
+}
+function relayStop(){
+  R.on = false; R.gen++;
+  clearInterval(R.tick); R.tick = 0;
+  const ls = R.links; R.links = [];
+  setTimeout(() => ls.forEach(l => l.close()), 700);     // dá tempo do TCHAU sair
+}
+async function relayStart(){
+  relayStop();
+  const gen = R.gen, role = S.role, room = S.roomId;
+  if (!room || !window.WebSocket) return;
+  let d;
+  try { d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode('nevoa-relay:' + room))); } catch { return; }
+  if (R.gen !== gen || S.ended || S.roomId !== room) return;
+  const base = 'nevoa/' + hex(d.slice(0, 16));
+  R.sub = base + (role === 'host' ? '/g' : '/h'); R.pub = base + (role === 'host' ? '/h' : '/g');
+  R.sid = rand(8); R.needSince = Date.now(); R.on = true;
+  R.links = RELAY_URLS.map(u => relayLink(u, gen));
+  if (role === 'guest') R.tick = setInterval(relayTick, 2000);
+}
+
 function initHost(attempt){
   if (S.ended) return;
   const p = new Peer(PREFIX + S.roomId, PEER_OPTS);
@@ -456,6 +620,7 @@ function initGuest(){
   p.on('error', e => {
     if (S.ended) return;
     const t = e && e.type;
+    if (S.conn && S.conn.open) return;                  // já conectado pelo relay
     if (t === 'peer-unavailable') { setStatus('host-offline'); scheduleRetry(3200); }
     else if (['network','server-error','socket-error','socket-closed','ssl-unavailable'].includes(t)) {
       setStatus('signal'); scheduleRetry(3000);
@@ -465,7 +630,7 @@ function initGuest(){
 function dial(){
   const p = S.peer;
   if (S.ended || !p || p.destroyed || !p.open) return;
-  if (S.conn && S.conn.open) return;
+  if (FORCE_RELAY || (S.conn && S.conn.open)) return;
   setStatus('connecting');
   const c = p.connect(PREFIX + S.roomId, { reliable: true, serialization: 'binary', metadata: { app: 'nevoa', v: 1 } });
   attachConn(c);
@@ -820,7 +985,13 @@ function onChunk(tid, idx, data){
   }
 }
 async function waitBuffer(){
-  const dc = S.conn && S.conn.dataChannel;
+  const c = S.conn;
+  if (c && c.relay) {                                    // relay público: ritmo menor para não ser limitado
+    await sleep(30);
+    while (S.conn === c && c.bufferedAmount > 262144 && S.connected && !S.ended) await sleep(40);
+    return;
+  }
+  const dc = c && c.dataChannel;
   while (dc && dc.bufferedAmount > 4 * 1048576 && S.connected && !S.ended) await sleep(25);
 }
 function queueFile(file, existing){
@@ -1079,6 +1250,7 @@ function wipe(reason){
   cleanupTimers();
   S.transfersIn.forEach(tr => clearTimeout(tr.timer));
   try { if (S.conn) S.conn.close(); } catch {}
+  relayStop();
   try { if (S.peer) S.peer.destroy(); } catch {}
   S.conn = null; S.peer = null; S.connected = false; S.peerTyping = false;
   S.messages.forEach(m => { if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch {} } });
@@ -1172,7 +1344,7 @@ async function createRoom(password){
   await restore();
   renderInvite(); renderMe(); renderPeer();
   showView('waiting'); setStatus('waiting');
-  initHost(0);
+  initHost(0); relayStart();
   copyLink(true);
 }
 async function joinRoom(h, password){
@@ -1190,7 +1362,7 @@ async function joinRoom(h, password){
   await restore();
   renderInvite(); renderMe(); renderPeer();
   showView('chat'); setStatus('connecting');
-  initGuest();
+  initGuest(); relayStart();
 }
 
 /* ───────── fundo: partículas de névoa ───────── */
@@ -1605,7 +1777,8 @@ function openDiag(){
   const ice = S.conn && S.conn.peerConnection ? S.conn.peerConnection.iceConnectionState : '—';
   const rows = [
     ['Papel', S.role || '—'], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
-    ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState], ['ICE', ice],
+    ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState], ['Rota', !S.connected ? '—' : (S.conn && S.conn.relay ? 'relay cifrado (' + S.conn.link.url.split('/')[2] + ')' : 'direta (P2P)')], ['ICE', ice],
+    ['Relays prontos', R.links.filter(l => l.ready).length + '/' + R.links.length],
     ['Latência', S.rtt ? S.rtt + ' ms' : '—'], ['Quedas', String(S.disconnects)],
     ['Senha na sala', S.hasPassword ? 'sim' : 'não'], ['Broker', PEER_OPTS.host],
     ['STUN/TURN', PEER_OPTS.config.iceServers.map(s => Array.isArray(s.urls) ? s.urls.join(', ') : s.urls).join(' | ')]
@@ -1750,7 +1923,7 @@ async function resumeHost(h, password){
   const had = S.messages.length > 0;
   showView(had ? 'chat' : 'waiting');
   setStatus(had ? 'waitreturn' : 'waiting');
-  initHost(0);
+  initHost(0); relayStart();
 }
 
 async function boot(){
@@ -1784,5 +1957,6 @@ async function boot(){
     else showInvitePreview(h);
   } else showView('landing');
 }
+addEventListener('pagehide', () => { try { if (S.conn && S.conn.relay) S.conn.close(); } catch {} });
 boot();
 })();
