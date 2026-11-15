@@ -408,7 +408,10 @@ function initHost(attempt){
   p.on('open', () => { if (!S.ended && !S.connected) setStatus(S.view === 'waiting' ? 'waiting' : 'waitreturn'); });
   p.on('connection', c => {
     if (S.ended) { try { c.close(); } catch {} return; }
-    if (S.conn && S.conn.open && !S.wasConnected) {   // sala cheia: só dois (reconexão não conta)
+    // sala cheia: só dois. Se a conexão atual está viva (contato recente), recusa a nova;
+    // se está morta/zumbi, aceita (é o convidado reconectando).
+    const live = S.conn && S.conn.open && S.connected && Date.now() - (S.lastContact || 0) < 15000;
+    if (live) {
       c.on('open', async () => {
         try { const f = await makeFrame(1, te.encode(JSON.stringify({ t: 'full' }))); c.send(f.buffer); } catch {}
         setTimeout(() => { try { c.close(); } catch {} }, 400);
@@ -1298,6 +1301,7 @@ function wireEvents(){
   $('#btn-diag-side').addEventListener('click', openDiag);
   $('#btn-diag-close').addEventListener('click', () => { $('#modal-diag').hidden = true; });
   $('#btn-appear').addEventListener('click', openAppear);
+  $('#btn-appear-top').addEventListener('click', openAppear);
   $('#btn-appear-close').addEventListener('click', () => { $('#modal-appear').hidden = true; });
   $('#appear-color').addEventListener('input', e => { S.accent = e.target.value; applyAccent(); savePrefs(); syncAppear(); });
   $('#appear-blur').addEventListener('change', e => { S.blurOn = e.target.checked; savePrefs(); if (!S.blurOn) setBlurred(false); });
@@ -1607,11 +1611,20 @@ function openDiag(){
   $('#modal-diag').hidden = false;
 }
 
-const THEMES = [['nevoa','Névoa','#070812'],['meianoite','Meia-noite','#030409'],['claro','Claro','#f2f3fa'],['contraste','Contraste','#000000']];
-const ACCENTS = ['#8B7CFF','#35E0E6','#FF4D9E','#FFB020','#3DDC97','#55A6FF'];
+// [id, nome, fundo, destaque sugerido, claro?]
+const THEMES = [
+  ['nevoa','Névoa','#0B0D1E','#8B7CFF',0], ['meianoite','Meia-noite','#030409','#55A6FF',0],
+  ['oceano','Oceano','#071a26','#35E0E6',0], ['floresta','Floresta','#0b1a12','#3DDC97',0],
+  ['crepusculo','Crepúsculo','#1d0f17','#FF6B8B',0], ['claro','Claro','#f2f3fa','#5B4BE8',1],
+  ['papel','Papel','#f5efe4','#B5562B',1], ['contraste','Contraste','#000000','#FFD400',0]
+];
+const ACCENTS = ['#8B7CFF','#5B4BE8','#35E0E6','#3DDC97','#FF6B8B','#FFB020','#B5562B','#55A6FF'];
 function applyTheme(){
-  document.body.classList.remove('theme-nevoa','theme-meianoite','theme-claro','theme-contraste');
-  if (S.theme !== 'nevoa') document.body.classList.add('theme-' + S.theme);
+  const t = THEMES.find(x => x[0] === S.theme) || THEMES[0];
+  document.body.className = document.body.className.replace(/\btheme-\S+/g, '').trim();
+  if (t[0] !== 'nevoa') document.body.classList.add('theme-' + t[0]);
+  if (t[4]) document.body.classList.add('theme-light');
+  const mc = document.querySelector('meta[name="theme-color"]'); if (mc) mc.content = t[2];
 }
 function applyAccent(){
   document.documentElement.style.setProperty('--accent', S.accent);
@@ -1624,10 +1637,11 @@ function loadPrefs(){
 }
 function buildAppearPanel(){
   const tw = $('#appear-themes'); tw.innerHTML = '';
-  THEMES.forEach(([id, label, bg]) => {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'appear-theme'; b.style.background = bg; b.dataset.theme = id;
-    b.innerHTML = '<span>' + label + '</span>';
-    b.addEventListener('click', () => { S.theme = id; applyTheme(); savePrefs(); syncAppear(); });
+  THEMES.forEach(([id, label, bg, acc]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'appear-theme'; b.dataset.theme = id;
+    b.style.background = `linear-gradient(135deg, ${bg} 55%, ${acc})`; b.setAttribute('aria-label', 'Tema ' + label);
+    b.innerHTML = `<i style="background:${acc}"></i><span>${label}</span>`;
+    b.addEventListener('click', () => { S.theme = id; S.accent = acc; applyTheme(); applyAccent(); savePrefs(); syncAppear(); });
     tw.appendChild(b);
   });
   const sw = $('#appear-swatches'); sw.innerHTML = '';

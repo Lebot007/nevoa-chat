@@ -32,6 +32,7 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 - Entrada por convite colado (auto-join ao colar um link válido)
 - Faixa de conexão em linguagem simples com "Tentar agora" e reconexão automática
 - Apelidos anônimos editáveis; textos cifrados no localStorage por até 12 h; arquivos só em RAM
+- 8 temas (Névoa, Meia-noite, Oceano, Floresta, Crepúsculo, Claro, Papel, Contraste) e cor de destaque personalizável
 - Layout responsivo, QR Code e sala limitada a duas pessoas
 
 ## Rodar localmente (apenas desenvolvedores)
