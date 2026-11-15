@@ -20,8 +20,11 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 ## Como funciona
 
 - O anfitrião cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
-- Cada sala é um canal em brokers MQTT públicos (EMQX, HiveMQ, Eclipse, Mosquitto) via WebSocket seguro. Todos publicam e recebem no mesmo canal — é um grupão, todos falam com todos. Os brokers só repassam bytes já cifrados e não armazenam nada.
-- Os 4 brokers funcionam em paralelo: se um cai ou é bloqueado na rede de alguém, os outros seguem. Funciona em casas diferentes, 4G/5G e VPN (não depende de P2P).
+- Cada sala é um canal em brokers MQTT públicos (EMQX, HiveMQ, Eclipse, TBMQ, Mosquitto) via WebSocket seguro. Todos publicam e recebem no mesmo canal — é um grupão, todos falam com todos. Os brokers só repassam bytes já cifrados e não armazenam nada.
+- Os 5 brokers funcionam em paralelo; dois usam a porta 443 (a mesma do HTTPS), que passa por VPN e firewall corporativo. Se um cai ou é bloqueado na rede de alguém, os outros seguem.
+- **Conexão direta (P2P) quando a rede deixa:** os navegadores combinam um WebRTC entre si pelo próprio canal cifrado. Cada mensagem vai pelo P2P e pelo relay; quem recebe fica com a primeira cópia. Na mesma cidade isso costuma ser dezenas de ms em vez de centenas. Em 4G/CGNAT ou VPN, onde o P2P não abre, tudo segue pelo relay.
+- **Ponte entre brokers:** se alguém só alcança brokers que o remetente não usa (ex.: VPN só com a 443), um participante conectado aos dois lados repassa os mesmos bytes cifrados.
+- **Reconexão automática:** conexão que trava sem fechar (troca de Wi-Fi para 4G, celular que dormiu) é detectada em ~15 s e refeita; ao voltar para a aba, o site confere tudo na hora.
 - O remetente de cada quadro é autenticado junto com a cifra (AES-GCM com dados associados): sem a chave ninguém forja mensagens.
 - Limite de 10 pessoas: quem chega espera ~3 s as apresentações; se já houver 10, recebe "Sala cheia". A ordem de chegada decide, igual para todos.
 - Se o anfitrião fechar a aba, os outros continuam conversando. Só ele pode encerrar para todos: o link carrega apenas o hash de um segredo que fica no navegador dele.
@@ -37,6 +40,16 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 - Apelidos anônimos editáveis; textos cifrados no localStorage por até 12 h; arquivos só em RAM
 - 8 temas (Névoa, Meia-noite, Oceano, Floresta, Crepúsculo, Claro, Papel, Contraste) e cor de destaque personalizável
 - Layout responsivo, QR Code e sala limitada a 10 pessoas
+
+## Testes automáticos
+
+```bash
+node tests/e2e.mjs
+```
+
+Sobe brokers falsos, um emulador de rede e 11 navegadores (Chrome headless): 10 participantes em 3 "casas" — fibra com P2P, 4G/CGNAT (150 ms ± 100 ms, 100 KB/s) e VPN corporativa só com a porta 443 — mais um visitante para testar a sala cheia. Verifica entrada, P2P × relay e latência, mensagens simultâneas, arquivos, queda de broker, queda de internet, troca de rede com conexão travada, limite de 10, apagar/encerrar, F5 e saída do anfitrião. Roda sozinho no GitHub Actions a cada push.
+
+Em `localhost` o site aceita `?relays=ws://...,ws://...` e `?nop2p=1` para os testes; no site publicado esses parâmetros são ignorados.
 
 ## Rodar localmente (apenas desenvolvedores)
 
@@ -59,7 +72,7 @@ Use token classic com escopo repo e revogue depois em https://github.com/setting
 
 ## Privacidade
 
-Os brokers públicos veem os IPs dos participantes e bytes cifrados — nunca a chave nem o conteúdo, e não guardam nada. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
+Os brokers públicos veem os IPs dos participantes e bytes cifrados — nunca a chave nem o conteúdo, e não guardam nada. Com a conexão direta (P2P) ligada, os participantes também podem ver o IP uns dos outros, como em qualquer chamada WebRTC; dá para desligá-la em "Aparência e privacidade" e passar tudo pelo relay. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
 
 ## Licença
 

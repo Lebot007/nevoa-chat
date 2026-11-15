@@ -99,6 +99,9 @@ const S = {
   connected: false, wasConnected: false, ended: false, linkUp: false, admitted: false, admitAt: 0,
   myId: null, myIdBytes: null, joinedAt: 0, members: new Map(), hostTag: null, hostSecret: null,
   seen: new Map(), mySent: new Map(), sentAt: new Map(), leaveFrame: null, gone: new Map(),
+  peers: new Map(), rtcStash: new Map(), p2pFails: new Map(), p2pRetry: new Map(), returning: false,
+  bootId: hex(rand(4)),                 // muda a cada carregamento da página (F5)
+  helloSeq: 0,                          // ordem dos "olás": chegam por vários caminhos, às vezes fora de ordem
   view: 'landing', netState: 'idle', me: genMe(), greeted: false,
   messages: [], msgIndex: new Map(), msgNodes: new Map(),
   transfersIn: new Map(), transfersOut: new Map(), outFiles: new Map(), outQueue: [], outBusy: false,
@@ -109,7 +112,7 @@ const S = {
   presence: 'online',
   saltB64: null, hasPassword: false,
   disconnects: 0,
-  blurOn: true, theme: 'nevoa', accent: '#8B7CFF',
+  blurOn: true, p2pPref: true, theme: 'nevoa', accent: '#8B7CFF',
   recorder: null, recChunks: [], recTimer: 0, recStart: 0
 };
 
@@ -219,7 +222,7 @@ function renderMembers(){
     box.innerHTML = list.length ? list.map(m => {
       const c = AV[m.color % AV.length];
       return `<div class="participant"><span class="avatar" style="background:linear-gradient(135deg,${c[0]},${c[1]})">${esc(m.name.charAt(0).toUpperCase())}</span>` +
-        `<div class="p-info"><span class="p-name">${esc(m.name)}</span><span class="p-role">${m.role === 'host' ? 'anfitrião' : 'convidado'}${m.presence === 'away' ? ' · ausente' : ''}</span></div>` +
+        `<div class="p-info"><span class="p-name">${esc(m.name)}</span><span class="p-role">${m.role === 'host' ? 'anfitrião' : 'convidado'}${m.presence === 'away' ? ' · ausente' : ''} · ${isDirect(m.id) ? 'direto' : 'relay'}</span></div>` +
         `<span class="dot dot-${m.presence === 'away' ? 'warn' : 'on'}"></span></div>`;
     }).join('') : '<p class="member-empty">Ninguém mais por aqui ainda. Envie o link — cabem até ' + MAX_MEMBERS + ' pessoas.</p>';
   }
@@ -258,9 +261,15 @@ function refreshStatus(){
   refreshConnHelp();
 }
 function setStatus(k){ S.netState = k; refreshStatus(); }
+function bestRtt(){
+  const d = directPeers().map(p => p.rtt).filter(Boolean).sort((a, b) => a - b);
+  return d.length ? d[Math.floor(d.length / 2)] : S.rtt;          // mediana do caminho direto, senão o relay
+}
 function renderLatency(){
-  latency.textContent = S.rtt + ' ms';
-  latency.dataset.q = S.rtt < 150 ? 'good' : S.rtt < 400 ? 'ok' : 'bad';
+  const r = bestRtt();
+  latency.textContent = r + ' ms';
+  latency.dataset.q = r < 150 ? 'good' : r < 400 ? 'ok' : 'bad';
+  latency.title = directPeers().length ? 'Conexão direta com ' + directPeers().length + ' pessoa(s)' : 'Via relay cifrado';
 }
 
 /* ───────── criptografia ───────── */
@@ -356,10 +365,21 @@ function sweepStorage(){
    Cada sala é um canal. Todos publicam e recebem nele; os quadros já saem cifrados
    (AES-256-GCM) do navegador. Os brokers só veem bytes cifrados — a chave fica no link.
    Vários brokers em paralelo: se um cai ou é bloqueado na rede de alguém, os outros seguem. */
-const RELAY_URLS = [
-  'wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt',
-  'wss://mqtt.eclipseprojects.io/mqtt', 'wss://test.mosquitto.org:8081/mqtt'
+const RELAYS_DEFAULT = [
+  { url: 'wss://broker.emqx.io:8084/mqtt' },
+  { url: 'wss://broker.hivemq.com:8884/mqtt' },
+  { url: 'wss://mqtt.eclipseprojects.io/mqtt' },             // porta 443: passa por VPN e firewall corporativo
+  { url: 'wss://demo.tbmq.io/mqtt', user: 'demo' },           // porta 443
+  { url: 'wss://test.mosquitto.org:8081/mqtt' }
 ];
+// só em localhost (desenvolvimento/testes): ?relays=ws://...,ws://... e ?nop2p=1
+const IS_DEV = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+const QS = new URLSearchParams(location.search);
+const RELAYS = IS_DEV && QS.get('relays') ? QS.get('relays').split(',').filter(Boolean).map(u => ({ url: u })) : RELAYS_DEFAULT;
+const P2P_OK = !(IS_DEV && QS.get('nop2p') === '1') && typeof RTCPeerConnection === 'function';
+// P2P revela o IP aos outros participantes (como qualquer WebRTC): a pessoa pode desligar
+const p2pOn = () => P2P_OK && S.p2pPref;
+const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
 const R = { on: false, gen: 0, links: [], topic: '', hb: 0, prune: 0, lastAnnounce: 0 };
 
 function mqttPacket(head, ...parts){
@@ -372,24 +392,25 @@ function mqttPacket(head, ...parts){
 }
 const mqttStr = str => { const b = te.encode(str); const o = new Uint8Array(2 + b.length); o[0] = b.length >> 8; o[1] = b.length & 255; o.set(b, 2); return o; };
 
-function relayLink(url, idx, gen){
-  const L = { url, idx, ws: null, ready: false, dead: false, ka: 0, timer: 0, buf: new Uint8Array(0) };
+function relayLink(cfg, idx, gen){
+  const url = cfg.url;
+  const L = { url, idx, ws: null, ready: false, dead: false, ka: 0, timer: 0, ct: 0, fails: 0, lastRx: 0, buf: new Uint8Array(0) };
+  // espera crescente entre tentativas: 1 s, 2 s, 4 s… até 10 s (com variação para não sincronizar todo mundo)
+  const backoff = () => Math.min(10000, 1000 * 2 ** Math.min(L.fails, 4)) * (.75 + Math.random() * .5);
   const schedule = ms => { clearTimeout(L.timer); if (!L.dead && R.gen === gen) L.timer = setTimeout(open, ms); };
   function packet(first, body){
     const type = first >> 4, ws = L.ws;
     if (type === 2) {                                   // CONNACK
-      if (body[1] !== 0) { try { ws.close(); } catch {} return; }
+      if (body[1] !== 0) { reset(); return; }
       ws.send(mqttPacket(0x82, [0, 1], mqttStr(R.topic), [0]));
     } else if (type === 9) {                            // SUBACK: pronto para conversar
-      L.ready = true;
-      clearInterval(L.ka);
-      L.ka = setInterval(() => { try { if (ws.readyState === 1) ws.send(new Uint8Array([0xC0, 0])); } catch {} }, 20000);
+      L.ready = true; L.fails = 0; clearTimeout(L.ct);
       onLinkChange();
     } else if (type === 3) {                            // PUBLISH
       if (body.length < 2) return;
       let p = 2 + ((body[0] << 8) | body[1]);
       if ((first >> 1) & 3) p += 2;
-      if (p <= body.length) wireRecv(body.slice(p));
+      if (p <= body.length) wireRecv(body.slice(p), false, L.idx);
     }
   }
   function feed(chunk){
@@ -405,38 +426,60 @@ function relayLink(url, idx, gen){
       try { packet(first, body); } catch {}
     }
   }
+  // derruba a conexão atual (fechada, travada ou recusada) e agenda outra
+  function reset(){
+    const ws = L.ws; L.ws = null;
+    clearInterval(L.ka); clearTimeout(L.ct);
+    if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+    const was = L.ready; L.ready = false;
+    if (was) onLinkChange();
+    L.fails++;
+    schedule(backoff());
+  }
   function open(){
     clearTimeout(L.timer); L.timer = 0;
     if (L.dead || R.gen !== gen) return;
-    if (L.ws && L.ws.readyState <= 1) return;
+    if (L.ws) return;
     let ws;
-    try { ws = new WebSocket(url, 'mqtt'); } catch { schedule(5000); return; }
-    ws.binaryType = 'arraybuffer'; L.ws = ws; L.buf = new Uint8Array(0);
-    ws.onopen = () => { try { ws.send(mqttPacket(0x10, mqttStr('MQTT'), [4, 2, 0, 60], mqttStr('nv' + uid() + uid().slice(0, 4)))); } catch {} };
-    ws.onmessage = e => { if (e.data instanceof ArrayBuffer) feed(new Uint8Array(e.data)); };
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (L.ws !== ws) return;
-      const was = L.ready;
-      L.ready = false; clearInterval(L.ka);
-      if (was) onLinkChange();
-      schedule(4000 + Math.random() * 2000);
+    try { ws = new WebSocket(url, 'mqtt'); } catch { L.fails++; schedule(backoff()); return; }
+    ws.binaryType = 'arraybuffer'; L.ws = ws; L.buf = new Uint8Array(0); L.lastRx = Date.now();
+    L.ct = setTimeout(() => { if (L.ws === ws && !L.ready) reset(); }, 12000);   // não ficou pronto em 12 s
+    ws.onopen = () => {
+      try {
+        const flags = cfg.user ? 0x82 : 0x02;            // sessão limpa (+ usuário quando o broker pede)
+        const parts = [mqttStr('MQTT'), [4, flags, 0, 30], mqttStr('nv' + uid() + uid().slice(0, 4))];
+        if (cfg.user) parts.push(mqttStr(cfg.user));
+        ws.send(mqttPacket(0x10, ...parts));
+      } catch {}
+      // batimento MQTT a cada 5 s; nada recebido há 13 s = conexão travada (troca de Wi-Fi/4G, celular dormiu).
+      // Reconecta bem antes dos 45 s em que os outros considerariam a pessoa fora da sala.
+      L.ka = setInterval(() => {
+        if (L.ws !== ws) return;
+        if (Date.now() - L.lastRx > 13000) { reset(); return; }
+        try { if (ws.readyState === 1) ws.send(new Uint8Array([0xC0, 0])); } catch {}
+      }, 5000);
     };
+    ws.onmessage = e => { L.lastRx = Date.now(); if (e.data instanceof ArrayBuffer) feed(new Uint8Array(e.data)); };
+    ws.onerror = () => {};
+    ws.onclose = () => { if (L.ws === ws) reset(); };
   }
-  L.pub = payload => { try { if (L.ready && L.ws.readyState === 1) { L.ws.send(mqttPacket(0x30, mqttStr(R.topic), payload)); return true; } } catch {} return false; };
-  L.kick = () => { if (!L.ready && (!L.ws || L.ws.readyState > 1)) open(); };
-  L.close = () => { L.dead = true; clearTimeout(L.timer); clearInterval(L.ka); try { L.ws.close(); } catch {} };
+  L.pub = payload => { try { if (L.ready && L.ws && L.ws.readyState === 1) { L.ws.send(mqttPacket(0x30, mqttStr(R.topic), payload)); return true; } } catch {} return false; };
+  L.kick = () => { if (!L.ws) { L.fails = 0; open(); } };
+  // ao voltar para a aba / rede voltar: conexão parada há muito tempo provavelmente morreu
+  L.check = () => { if (L.ws && Date.now() - L.lastRx > 12000) reset(); else L.kick(); };
+  L.close = () => { L.dead = true; clearTimeout(L.timer); clearTimeout(L.ct); clearInterval(L.ka); const ws = L.ws; L.ws = null; if (ws) { ws.onclose = null; try { ws.close(); } catch {} } };
   open();
   return L;
 }
 const readyLinks = () => R.links.filter(l => l.ready);
 const linkMask = () => R.links.reduce((m, l, i) => l.ready ? m | (1 << i) : m, 0);
 
-/* envio: texto/controle vai por todos os brokers prontos (redundância; quem recebe descarta duplicatas).
-   Arquivos vão só pelo menor conjunto de brokers que alcança todo mundo (economiza dados). */
-function coverLinks(){
+/* envio: cada quadro vai direto (P2P) para quem está conectado direto e pelo relay.
+   Texto/controle: relay por todos os brokers prontos (redundância; quem recebe descarta cópias).
+   Arquivos: relay só para quem NÃO está direto, pelo menor conjunto de brokers que alcança essas pessoas. */
+function coverLinks(members){
   const ready = R.links.filter(l => l.ready);
-  let left = admittedMembers().map(m => m.ln || 0).filter(x => x);
+  let left = (members || admittedMembers()).map(m => m.ln || 0).filter(x => x);
   const pick = [];
   while (left.length) {
     let best = null, bc = 0;
@@ -450,22 +493,56 @@ function coverLinks(){
   }
   return pick.length ? pick : ready.slice(0, 1);
 }
+const relayOnly = () => admittedMembers().filter(m => !isDirect(m.id));
 function netSend(f, opts = {}){
-  const ls = opts.cover ? coverLinks() : readyLinks();
-  let n = 0; ls.forEach(l => { if (l.pub(f)) n++; });
-  if (n) {
+  let n = 0;
+  directPeers().forEach(p => { try { if (p.dc.bufferedAmount < 8 * 1048576) { p.dc.send(f); n++; } } catch {} });
+  let ls;
+  if (opts.cover) { const need = relayOnly(); ls = need.length ? coverLinks(need) : []; }
+  else ls = readyLinks();
+  let r = 0; ls.forEach(l => { if (l.pub(f)) r++; });
+  if (n + r) {
     const k = hex(f.subarray(9, 21));
     S.mySent.set(k, Date.now()); trimMap(S.mySent, 3000);
-    if (opts.rtt) S.sentAt.set(k, Date.now()), trimMap(S.sentAt, 200);
+    if (opts.rtt && r) S.sentAt.set(k, Date.now()), trimMap(S.sentAt, 200);
   }
-  return n > 0;
+  return n + r > 0;
+}
+/* ponte entre brokers: se alguém só alcança brokers que o remetente não usa (ex.: VPN só com a porta 443,
+   ou um broker ainda reconectando), um participante que alcança os dois lados repassa o quadro.
+   São os mesmos bytes cifrados; quem recebe descarta cópias. Um único "repassador" por destino:
+   o de menor id entre quem ouve o remetente e alcança o destino (todos calculam igual). */
+function relayForward(f, from, viaDC, linkIdx){
+  if (!S.admitted || !R.on) return;
+  const mine = linkMask();
+  if (!mine) return;
+  // brokers do remetente: o que ele anunciou + o broker por onde este quadro chegou (vale para quem acabou de chegar)
+  const snd = S.members.get(from);
+  const sMask = (snd ? (snd.ln || 0) : 0) | (linkIdx >= 0 ? 1 << linkIdx : 0);
+  const hears = x => (x.ln & sMask) !== 0;
+  const everyone = [...S.members.values()];
+  const out = new Set(), dcOut = new Set();
+  for (const m of everyone) {
+    if (m.id === from || !m.ln || (m.ln & sMask)) continue;            // já ouve o remetente pelo relay
+    if (isDirect(m.id)) { if (viaDC || !isDirect(from)) dcOut.add(m.id); continue; }
+    if (!(m.ln & mine)) continue;                                        // eu também não alcanço
+    const meHears = viaDC || (mine & sMask) !== 0;
+    if (!meHears) continue;
+    const cands = everyone.filter(x => x.adm && x.id !== from && x.id !== m.id && hears(x) && (x.ln & m.ln)).map(x => x.id);
+    cands.push(S.myId); cands.sort();
+    if (cands[0] !== S.myId) continue;                                   // outro participante repassa
+    const l = R.links.find(x => x.ready && (m.ln & (1 << x.idx)));
+    if (l) out.add(l);
+  }
+  out.forEach(l => l.pub(f));
+  dcOut.forEach(id => { const p = S.peers.get(id); try { if (p && p.dc && p.dc.readyState === 'open') p.dc.send(f); } catch {} });
 }
 function trimMap(m, max){ if (m.size <= max) return; const it = m.keys(); while (m.size > max * .8) m.delete(it.next().value); }
 
 /* recebimento em fila: decifrar é assíncrono, a fila mantém a ordem de chegada */
 let wireQ = Promise.resolve();
-function wireRecv(d){ wireQ = wireQ.then(() => onWire(d)).catch(() => {}); }
-async function onWire(f){
+function wireRecv(d, viaDC, linkIdx){ wireQ = wireQ.then(() => onWire(d, viaDC, linkIdx)).catch(() => {}); }
+async function onWire(f, viaDC, linkIdx){
   if (S.ended || !S.cryptoKey || !S.myId || f.length < 22 || f[0] !== WIRE_V) return;
   const from = hex(f.subarray(1, 9)), k = hex(f.subarray(9, 21));
   if (S.seen.has(k)) return;                             // mesma mensagem por outro broker
@@ -483,6 +560,7 @@ async function onWire(f){
   try { pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: f.slice(9, 21), additionalData: f.slice(0, 9) }, S.cryptoKey, f.slice(21))); }
   catch { keyFail(); return; }
   if (S.ended || pt.length < 1) return;
+  relayForward(f, from, viaDC, linkIdx);                 // só quadros autênticos são repassados
   if (pt[0] === 1) {
     let o; try { o = JSON.parse(td.decode(pt.subarray(1))); } catch { return; }
     if (o && typeof o.t === 'string') handle(o, from);
@@ -494,6 +572,113 @@ async function onWire(f){
   }
 }
 
+/* ───────── conexão direta (WebRTC) entre participantes, quando a rede deixa ─────────
+   Combinada pelo próprio canal cifrado (sem servidor extra). O relay continua sempre ligado:
+   cada quadro vai pelos dois caminhos e quem recebe fica com o que chegar primeiro (as cópias
+   são descartadas). Resultado: a latência é a do caminho mais rápido, e se o P2P cair nada se perde.
+   Em 4G/CGNAT, VPN ou NAT simétrico o P2P costuma não abrir — aí tudo segue pelo relay. */
+const directPeers = () => [...S.peers.values()].filter(p => p.dc && p.dc.readyState === 'open');
+const isDirect = id => { const p = S.peers.get(id); return !!(p && p.dc && p.dc.readyState === 'open'); };
+function p2pSync(){
+  if (!p2pOn() || !S.admitted || S.ended) return;
+  const now = Date.now();
+  admittedMembers().forEach(m => {
+    // quem tem o id menor inicia: evita os dois lados oferecerem ao mesmo tempo
+    if (S.peers.has(m.id) || S.myId > m.id || (S.p2pRetry.get(m.id) || 0) > now) return;
+    p2pOpen(m.id);
+  });
+}
+function p2pNew(id, initiator){
+  const pc = new RTCPeerConnection({ iceServers: ICE });
+  const p = { id, pc, dc: null, rtt: 0, initiator, cands: S.rtcStash.get(id) || [], hasRemote: false, timer: 0, giveUp: 0 };
+  S.rtcStash.delete(id);
+  S.peers.set(id, p);
+  pc.onicecandidate = e => {
+    if (!e.candidate || S.peers.get(id) !== p) return;
+    const c = e.candidate.toJSON ? e.candidate.toJSON() : { candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex };
+    sendJSON({ t: 'rtc', to: id, k: 'cand', c });
+  };
+  pc.onconnectionstatechange = () => {
+    if (S.peers.get(id) !== p) return;
+    const st = pc.connectionState;
+    if (st === 'failed' || st === 'closed') p2pDrop(id, true);
+    else if (st === 'disconnected') {
+      clearTimeout(p.timer);
+      p.timer = setTimeout(() => { if (S.peers.get(id) === p && pc.connectionState === 'disconnected') p2pDrop(id, true); }, 8000);
+    }
+  };
+  pc.ondatachannel = e => p2pBind(p, e.channel);
+  // não abriu em 20 s: desiste por ora (o relay segue) e tenta mais tarde
+  p.giveUp = setTimeout(() => { if (S.peers.get(id) === p && !isDirect(id)) p2pDrop(id, true); }, 20000);
+  return p;
+}
+function p2pBind(p, dc){
+  p.dc = dc; dc.binaryType = 'arraybuffer';
+  dc.onopen = () => {
+    if (S.peers.get(p.id) !== p) return;
+    clearTimeout(p.giveUp); S.p2pFails.delete(p.id); S.p2pRetry.delete(p.id);
+    p2pPing(p); renderMembers(); updateConn();
+  };
+  dc.onclose = () => { if (S.peers.get(p.id) === p) p2pDrop(p.id, true); };
+  dc.onmessage = e => {
+    const d = e.data;
+    if (typeof d === 'string') {                         // ping/pong de latência do caminho direto
+      if (d[0] === 'p') { try { dc.send('q' + d.slice(1)); } catch {} }
+      else if (d[0] === 'q') { const r = Date.now() - Number(d.slice(1)); if (r >= 0 && r < 30000) { p.rtt = Math.max(1, r); renderLatency(); } }
+      return;
+    }
+    if (d instanceof ArrayBuffer) wireRecv(new Uint8Array(d), true);
+  };
+}
+function p2pPing(p){ try { if (p.dc && p.dc.readyState === 'open') p.dc.send('p' + Date.now()); } catch {} }
+async function p2pOpen(id){
+  const p = p2pNew(id, true);
+  try {
+    p2pBind(p, p.pc.createDataChannel('nevoa', { ordered: true }));
+    const o = await p.pc.createOffer(); await p.pc.setLocalDescription(o);
+    if (S.peers.get(id) === p) sendJSON({ t: 'rtc', to: id, k: 'offer', sdp: p.pc.localDescription.sdp });
+  } catch { p2pDrop(id, true); }
+}
+async function onRtc(o, from){
+  if (!p2pOn() || o.to !== S.myId || !S.admitted || S.ended) return;
+  const mb = S.members.get(from);
+  if (!mb || !mb.adm) return;
+  let p = S.peers.get(from);
+  try {
+    if (o.k === 'offer' && from < S.myId) {             // só aceita oferta de quem deve iniciar
+      if (p) p2pDrop(from, false);                       // oferta nova substitui a conexão velha
+      p = p2pNew(from, false);
+      await p.pc.setRemoteDescription({ type: 'offer', sdp: String(o.sdp || '') });
+      p.hasRemote = true; await p2pFlush(p);
+      const a = await p.pc.createAnswer(); await p.pc.setLocalDescription(a);
+      if (S.peers.get(from) === p) sendJSON({ t: 'rtc', to: from, k: 'answer', sdp: p.pc.localDescription.sdp });
+    } else if (o.k === 'answer' && p && p.initiator && !p.hasRemote) {
+      await p.pc.setRemoteDescription({ type: 'answer', sdp: String(o.sdp || '') });
+      p.hasRemote = true; await p2pFlush(p);
+    } else if (o.k === 'cand' && o.c && typeof o.c === 'object') {
+      if (!p) {                                          // candidato chegou antes da oferta (outro broker foi mais rápido)
+        const st = S.rtcStash.get(from) || []; if (st.length < 60) st.push(o.c); S.rtcStash.set(from, st);
+      } else if (p.hasRemote) await p.pc.addIceCandidate(o.c).catch(() => {});
+      else if (p.cands.length < 60) p.cands.push(o.c);
+    }
+  } catch { if (p && S.peers.get(from) === p) p2pDrop(from, true); }
+}
+async function p2pFlush(p){ const cs = p.cands.splice(0); for (const c of cs) { try { await p.pc.addIceCandidate(c); } catch {} } }
+function p2pDrop(id, retry){
+  const p = S.peers.get(id);
+  if (!p) return;
+  S.peers.delete(id);
+  clearTimeout(p.timer); clearTimeout(p.giveUp);
+  try { if (p.dc) { p.dc.onclose = null; p.dc.close(); } } catch {}
+  try { p.pc.onconnectionstatechange = null; p.pc.close(); } catch {}
+  if (retry && !S.ended) {                              // nova tentativa: 30 s, 60 s, 2 min… até 5 min
+    const n = (S.p2pFails.get(id) || 0) + 1; S.p2pFails.set(id, n);
+    S.p2pRetry.set(id, Date.now() + Math.min(300000, 30000 * 2 ** (n - 1)));
+  }
+  renderMembers(); updateConn();
+}
+function p2pCloseAll(){ [...S.peers.keys()].forEach(id => p2pDrop(id, false)); S.rtcStash.clear(); S.p2pFails.clear(); S.p2pRetry.clear(); }
+
 /* ───────── participantes ───────── */
 const byJoin = (a, b) => (a.joinedAt - b.joinedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const admittedMembers = () => [...S.members.values()].filter(m => m.adm).sort(byJoin);
@@ -502,8 +687,8 @@ function idKey(){ return 'nevoa:me:' + S.roomId; }
 function loadIdentity(){
   let o = null;
   try { o = JSON.parse(sessionStorage.getItem(idKey()) || 'null'); } catch {}
-  if (o && /^[0-9a-f]{16}$/.test(o.id) && Number(o.joinedAt) > 0) { S.myId = o.id; S.joinedAt = Number(o.joinedAt); }
-  else { S.myId = hex(rand(8)); S.joinedAt = Date.now(); }
+  if (o && /^[0-9a-f]{16}$/.test(o.id) && Number(o.joinedAt) > 0) { S.myId = o.id; S.joinedAt = Number(o.joinedAt); S.returning = true; }
+  else { S.myId = hex(rand(8)); S.joinedAt = Date.now(); S.returning = false; }
   S.myIdBytes = new Uint8Array(S.myId.match(/../g).map(h => parseInt(h, 16)));
   saveIdentity();
 }
@@ -514,7 +699,7 @@ function newIdentity(){
 }
 function helloPayload(re){
   return { t: 'hello', re: re ? 1 : 0, v: 2, name: S.me.name, color: S.me.color, role: S.role,
-    joinedAt: S.joinedAt, adm: S.admitted ? 1 : 0, presence: S.presence, ln: linkMask() };
+    joinedAt: S.joinedAt, adm: S.admitted ? 1 : 0, presence: S.presence, ln: linkMask(), boot: S.bootId, seq: ++S.helloSeq };
 }
 function announce(re, force){
   if (!R.on || S.ended) return;
@@ -530,7 +715,8 @@ function onLinkChange(){
   const up = readyLinks().length > 0;
   if (up && !S.linkUp) {
     S.linkUp = true;
-    if (!S.admitAt) S.admitAt = Date.now() + (S.role === 'host' ? 0 : ADMIT_WAIT);
+    // quem só recarregou a página (mesma identidade) já tinha vaga: espera menos
+    if (!S.admitAt) S.admitAt = Date.now() + (S.role === 'host' ? 0 : S.returning ? 1200 : ADMIT_WAIT);
     if (S.wasConnected) S.disconnects++;
   } else if (!up && S.linkUp) S.linkUp = false;
   if (up) announce(false);              // apresenta-se (todos respondem) — também informa os brokers que alcanço
@@ -562,9 +748,21 @@ function checkAdmission(){
   } else pushMessage(sysMsg('Você voltou à conversa.', 'info'));
   if (S.view === 'waiting' && admittedMembers().length) showView('chat');
   sound('connect'); fogDissipate();
-  renderMembers(); updateConn(); flushReads(); saveSoon();
+  renderMembers(); updateConn(); flushReads(); saveSoon(); p2pSync();
 }
-const memberTTL = m => m.presence === 'away' ? 150000 : 35000;   // aba oculta: navegador atrasa os timers
+// reforço do limite: se alguém chegou além dos 10 (ex.: não enxergou parte da sala ao entrar),
+// o participante admitido de menor id avisa essa pessoa
+function checkOverflow(id){
+  if (!S.admitted) return;
+  const now = Date.now();
+  const fresh = [...S.members.values()].filter(x => now - x.lastSeen < memberTTL(x));
+  fresh.push({ id: S.myId, joinedAt: S.joinedAt, adm: true });
+  fresh.sort(byJoin);
+  if (fresh.findIndex(x => x.id === id) < MAX_MEMBERS) return;
+  const boss = fresh.filter(x => x.adm).slice(0, MAX_MEMBERS).map(x => x.id).sort()[0];
+  if (boss === S.myId) sendJSON({ t: 'full', to: id });
+}
+const memberTTL = m => m.presence === 'away' ? 150000 : 45000;   // aba oculta: navegador atrasa os timers
 function pruneMembers(){
   const now = Date.now();
   S.members.forEach(m => { if (now - m.lastSeen > memberTTL(m)) removeMember(m.id, false); });
@@ -575,6 +773,7 @@ function removeMember(id, announced){
   if (!m) return;
   clearTimeout(m.typingTimer);
   S.members.delete(id);
+  p2pDrop(id, false); S.p2pFails.delete(id); S.p2pRetry.delete(id);
   if (m.shown) { S.gone.set(id, Date.now()); trimMap(S.gone, 200); }
   if (m.shown && S.admitted && !S.ended) {
     // se for só um F5, a pessoa volta em segundos com o mesmo id: não poluímos a conversa
@@ -585,10 +784,11 @@ function removeMember(id, announced){
 }
 function updateConn(){
   const was = S.connected;
-  S.connected = !S.ended && S.linkUp && S.admitted;
+  const up = S.linkUp || directPeers().length > 0;          // relay fora mas P2P de pé: segue conversando
+  S.connected = !S.ended && up && S.admitted;
   if (S.connected && !was) S.wasConnected = true;
-  if (!S.linkUp) setStatus(S.wasConnected ? 'retry' : 'connecting');
-  else if (!S.admitted) setStatus('joining');
+  if (!up) setStatus(S.wasConnected ? 'retry' : 'connecting');
+  else if (!S.admitted) setStatus(S.linkUp ? 'joining' : 'connecting');
   else setStatus('online');
 }
 
@@ -609,12 +809,12 @@ async function relayStart(){
   if (R.gen !== gen || S.ended || S.roomId !== room) return;
   R.topic = 'nevoa/' + hex(d.slice(0, 16)) + '/all';
   R.on = true;
-  R.links = RELAY_URLS.map((u, i) => relayLink(u, i, gen));
-  R.hb = setInterval(() => { if (S.linkUp) announce(true); }, 10000);     // batimento: presença e latência
+  R.links = RELAYS.map((c, i) => relayLink(c, i, gen));
+  R.hb = setInterval(() => { if (S.linkUp) announce(true); directPeers().forEach(p2pPing); p2pSync(); }, 10000);   // batimento: presença, latência, P2P
   R.prune = setInterval(pruneMembers, 5000);
   updateConn();
 }
-function kickLinks(){ R.links.forEach(l => l.kick()); }
+function kickLinks(){ R.links.forEach(l => l.check()); }
 
 /* ───────── protocolo ───────── */
 function handle(o, from){
@@ -628,8 +828,17 @@ function handle(o, from){
   switch (o.t) {
     case 'hello': {
       // quem saiu há menos de 1 min e voltou (F5, rede caiu) não gera outro "entrou"
+      // "olá" atrasado (chegou depois de um mais novo por outro broker/P2P): só conta como sinal de vida
+      if (mb && mb.boot && mb.boot === String(o.boot || '') && Number(o.seq) <= (mb.seq || 0)) {
+        if (!o.re) setTimeout(() => announce(true), 120 + Math.random() * 700);
+        break;
+      }
       const m = mb || { id: from, typing: false, typingTimer: 0, shown: Date.now() - (S.gone.get(from) || 0) < 60000 };
+      m.seq = Number(o.seq) || 0;
       const prevName = m.name;
+      // a pessoa recarregou a página: a conexão direta antiga morreu, refaz já (sem esperar o retry)
+      if (o.boot && m.boot && m.boot !== o.boot) { p2pDrop(from, false); S.p2pRetry.delete(from); S.p2pFails.delete(from); }
+      m.boot = String(o.boot || '').slice(0, 16);
       m.name = String(o.name || 'Anônimo').slice(0, 24).trim() || 'Anônimo';
       m.color = Math.abs(Number(o.color) || 0) % AV.length;
       m.role = o.role === 'host' ? 'host' : 'guest';
@@ -640,6 +849,7 @@ function handle(o, from){
       m.lastSeen = Date.now();
       S.members.set(from, m);
       if (!o.re) setTimeout(() => announce(true), 120 + Math.random() * 700);   // responde quem chegou
+      checkOverflow(from);
       if (m.adm && !m.shown) {
         m.shown = true;
         if (S.admitted) {
@@ -648,10 +858,13 @@ function handle(o, from){
           if (S.view === 'waiting') { showView('chat'); fogDissipate(); }
         }
       } else if (prevName && prevName !== m.name && m.shown) saveSoon();
-      renderMembers(); refreshStatus();
+      renderMembers(); refreshStatus(); p2pSync();
       break;
     }
-    case 'leave': if (mb) removeMember(from, !o.final); break;   // final = clicou em Sair (aviso na hora); sem final pode ser só F5
+    case 'leave': if (mb) removeMember(from, !o.final); break;
+    case 'full':                                                   // quem já está na sala avisa: passou de 10
+      if (o.to === S.myId && mb && mb.adm && !S.ended) sendJSON({ t: 'leave' }).finally(() => wipe('full'));
+      break;   // final = clicou em Sair (aviso na hora); sem final pode ser só F5
     case 'msg': {
       const id = String(o.id || '').slice(0, 32);
       if (!id || S.msgIndex.has(id)) break;
@@ -753,6 +966,7 @@ function handle(o, from){
       if (n) { mb.name = n; renderMembers(); refreshStatus(); }
       break;
     }
+    case 'rtc': onRtc(o, from); break;                            // combinação da conexão direta
     case 'end': verifyEnd(o, from); break;                         // só o anfitrião encerra
   }
 }
@@ -1012,10 +1226,11 @@ function onChunk(tid, idx, data, from){
   }
 }
 async function waitBuffer(){
-  // relay público: ritmo moderado para não ser limitado pelos brokers
-  await sleep(30);
-  const busy = () => coverLinks().some(l => l.ws && l.ws.bufferedAmount > 262144);
-  while (busy() && S.connected && !S.ended) await sleep(40);
+  const viaRelay = relayOnly().length > 0;
+  if (viaRelay) await sleep(30);                         // relay público: ritmo moderado para não ser limitado
+  const busy = () => directPeers().some(p => p.dc.bufferedAmount > 1048576) ||
+    (viaRelay && coverLinks(relayOnly()).some(l => l.ws && l.ws.bufferedAmount > 262144));
+  while (busy() && S.connected && !S.ended) await sleep(viaRelay ? 40 : 10);
 }
 function queueFile(file, existing){
   S.outQueue.push({ file, m: existing || null });
@@ -1271,10 +1486,10 @@ function wipe(reason){
   S.ended = true;
   cleanupTimers();
   S.transfersIn.forEach(tr => clearTimeout(tr.timer));
-  relayStop();
+  relayStop(); p2pCloseAll();
   S.connected = false;
   S.members.forEach(m => clearTimeout(m.typingTimer)); S.members.clear();
-  S.seen.clear(); S.mySent.clear(); S.sentAt.clear(); S.gone.clear(); S.leaveFrame = null;
+  S.seen.clear(); S.mySent.clear(); S.sentAt.clear(); S.gone.clear(); S.leaveFrame = null; S.rtt = 0;
   S.messages.forEach(m => { if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch {} } });
   try { localStorage.removeItem(skey()); } catch {}
   try { sessionStorage.removeItem(rkey()); sessionStorage.removeItem(idKey()); } catch {}
@@ -1512,6 +1727,12 @@ function wireEvents(){
   $('#btn-appear-close').addEventListener('click', () => { $('#modal-appear').hidden = true; });
   $('#appear-color').addEventListener('input', e => { S.accent = e.target.value; applyAccent(); savePrefs(); syncAppear(); });
   $('#appear-blur').addEventListener('change', e => { S.blurOn = e.target.checked; savePrefs(); if (!S.blurOn) setBlurred(false); });
+  $('#appear-p2p').addEventListener('change', e => {
+    S.p2pPref = e.target.checked; savePrefs();
+    if (!S.p2pPref) { p2pCloseAll(); toast('info', 'Conexão direta desligada: tudo passa pelo relay cifrado.'); }
+    else { p2pSync(); toast('info', 'Conexão direta ligada.'); }
+    renderMembers(); renderLatency();
+  });
   $('#btn-sound-chat').addEventListener('click', toggleSound);
   $('#btn-split').addEventListener('click', openSplit);
   $('#btn-split-room').addEventListener('click', () => copyText(S.roomId || '', 'Código da sala copiado.'));
@@ -1807,9 +2028,12 @@ function openDiag(){
     ['Papel', S.role === 'host' ? 'anfitrião' : S.role === 'guest' ? 'convidado' : '—'], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
     ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState],
     ['Participantes', (admittedMembers().length + (S.admitted ? 1 : 0)) + ' de ' + MAX_MEMBERS],
-    ['Rota', 'relay cifrado (AES-256-GCM)'],
+    ['Rota', (() => { const t = admittedMembers().length, d = admittedMembers().filter(m => isDirect(m.id)).length; return t ? d + ' direto (P2P) · ' + (t - d) + ' pelo relay' : '—'; })()],
+    ['Latência direta', directPeers().length ? directPeers().map(p => (p.rtt || '?') + ' ms').join(', ') : '—'],
+    ['Latência relay', S.rtt ? S.rtt + ' ms' : '—'],
+    ['P2P', p2pOn() ? 'ativado' : 'desativado'],
     ['Relays prontos', readyLinks().length + '/' + R.links.length + (readyLinks().length ? ' · ' + readyLinks().map(l => l.url.split('/')[2].split(':')[0]).join(', ') : '')],
-    ['Latência', S.rtt ? S.rtt + ' ms' : '—'], ['Quedas', String(S.disconnects)],
+    ['Quedas', String(S.disconnects)],
     ['Senha na sala', S.hasPassword ? 'sim' : 'não']
   ];
   $('#diag-grid').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
@@ -1835,9 +2059,9 @@ function applyAccent(){
   document.documentElement.style.setProperty('--accent', S.accent);
   document.documentElement.style.setProperty('--accent-deep', S.accent);
 }
-function savePrefs(){ try { localStorage.setItem('nevoa:pref:theme', S.theme); localStorage.setItem('nevoa:pref:accent', S.accent); localStorage.setItem('nevoa:pref:blur', S.blurOn ? '1' : '0'); } catch {} }
+function savePrefs(){ try { localStorage.setItem('nevoa:pref:theme', S.theme); localStorage.setItem('nevoa:pref:accent', S.accent); localStorage.setItem('nevoa:pref:blur', S.blurOn ? '1' : '0'); localStorage.setItem('nevoa:pref:p2p', S.p2pPref ? '1' : '0'); } catch {} }
 function loadPrefs(){
-  try { S.theme = localStorage.getItem('nevoa:pref:theme') || 'nevoa'; S.accent = localStorage.getItem('nevoa:pref:accent') || '#8B7CFF'; S.blurOn = localStorage.getItem('nevoa:pref:blur') !== '0'; } catch {}
+  try { S.theme = localStorage.getItem('nevoa:pref:theme') || 'nevoa'; S.accent = localStorage.getItem('nevoa:pref:accent') || '#8B7CFF'; S.blurOn = localStorage.getItem('nevoa:pref:blur') !== '0'; S.p2pPref = localStorage.getItem('nevoa:pref:p2p') !== '0'; } catch {}
   applyTheme(); applyAccent();
 }
 function buildAppearPanel(){
@@ -1859,7 +2083,7 @@ function buildAppearPanel(){
 function syncAppear(){
   $$('#appear-themes .appear-theme').forEach(b => b.classList.toggle('active', b.dataset.theme === S.theme));
   $$('#appear-swatches .appear-swatch').forEach(b => b.classList.toggle('active', b.dataset.accent === S.accent));
-  $('#appear-color').value = S.accent; $('#appear-blur').checked = S.blurOn;
+  $('#appear-color').value = S.accent; $('#appear-blur').checked = S.blurOn; $('#appear-p2p').checked = S.p2pPref;
 }
 function openAppear(){ buildAppearPanel(); syncAppear(); $('#modal-appear').hidden = false; }
 
@@ -1904,13 +2128,18 @@ function renderQuality(){
   if (!S.connected) { badge.hidden = true; return; }
   badge.hidden = false;
   let q = 'good', label = 'boa';
-  if (S.rtt >= 400 || S.disconnects >= 3) { q = 'bad'; label = 'instável'; }
-  else if (S.rtt >= 150 || S.disconnects >= 1) { q = 'ok'; label = 'regular'; }
+  const r = bestRtt();
+  if (r >= 400 || S.disconnects >= 3) { q = 'bad'; label = 'instável'; }
+  else if (r >= 150 || S.disconnects >= 1) { q = 'ok'; label = 'regular'; }
   badge.dataset.q = q; $('#quality-text').textContent = label;
 }
 function sendPresence(state){ S.presence = state; if (S.connected) sendJSON({ t:'presence', state }); }
 function initPresence(){
-  document.addEventListener('visibilitychange', () => sendPresence(document.hidden ? 'away' : 'online'));
+  document.addEventListener('visibilitychange', () => {
+    sendPresence(document.hidden ? 'away' : 'online');
+    // voltou para a aba (celular desbloqueado): confere se as conexões sobreviveram e se reapresenta
+    if (!document.hidden && R.on && !S.ended) { kickLinks(); announce(false); }
+  });
 }
 
 function openSplit(){
@@ -1985,6 +2214,7 @@ async function boot(){
     else showInvitePreview(h);
   } else showView('landing');
 }
+if (IS_DEV) window.__nevoa = { S, R, sendJSON, directPeers };   // só em localhost, para os testes automáticos
 addEventListener('pagehide', () => { try { if (S.leaveFrame && R.on) netSend(S.leaveFrame); } catch {} });
 boot();
 })();
