@@ -33,7 +33,11 @@ const urlFor = (link, h) => link.replace(/\?[^#]*/, '').replace('/index.html', '
 const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=19340',
   '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
   '--disable-features=WebRtcHideLocalIpsWithMdns', '--allow-loopback-in-peer-connection', 'about:blank'], { stdio: 'ignore' });
-await sleep(2000);
+// espera o Chrome abrir (em máquinas de CI a primeira abertura pode levar vários segundos)
+for (let i = 0; ; i++) {
+  try { await fetch('http://127.0.0.1:19340/json/version'); break; }
+  catch { if (i > 120) { console.error('Chrome não abriu em 60 s'); process.exit(1); } await sleep(500); }
+}
 
 async function page(label){
   const t = await (await fetch('http://127.0.0.1:19340/json/new?about:blank', { method: 'PUT' })).json();
