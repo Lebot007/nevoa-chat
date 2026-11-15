@@ -21,10 +21,13 @@ const QR_URLS = [
 const PEER_OPTS = {
   host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
   config: { iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }
-    // NAT simétrico/firewall restritivo: adicione um TURN próprio, ex.:
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
+    // Relay TURN público do PeerJS (o mesmo da config padrão da lib). Sem ele, redes diferentes
+    // atrás de CGNAT/4G/NAT simétrico nunca fecham a conexão P2P ("conectando" infinito).
+    { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' }
+    // Para mais robustez, adicione um TURN próprio, ex.:
     // { urls: ['turn:SEU_HOST:3478', 'turn:SEU_HOST:443?transport=tcp'], username: '...', credential: '...' }
-  ]}
+  ], sdpSemantics: 'unified-plan', iceCandidatePoolSize: 4 }
 };
 const ANIMALS = ['Corvo','Raposa','Lince','Garça','Orca','Falcão','Jaguar','Coruja','Lobo','Axolote','Pantera','Grou'];
 const ADJS = ['Âmbar','Cobalto','Carmim','Violeta','Grafite','Turquesa','Escarlate','Índigo','Dourado','Prateado','Obsidiana','Ciano'];
@@ -469,7 +472,7 @@ function dial(){
       try { c.close(); } catch {}
       setStatus('host-offline'); scheduleRetry(2500);
     }
-  }, 12000);
+  }, 25000);   // via relay TURN a negociação ICE pode levar mais que 12 s
 }
 function scheduleRetry(ms){
   clearTimeout(S.retryTimer);

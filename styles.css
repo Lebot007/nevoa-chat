@@ -408,6 +408,23 @@ body.theme-meianoite{ --bg0:#030409; --bg1:#070912; --surface:#0c0f1e; --overlay
 body.theme-claro{ --bg0:#f2f3fa; --bg1:#ffffff; --surface:#ffffff; --overlay:#eef0fa; --line:#d9dcf0; --line-soft:rgba(106,92,255,.16); --text:#1c1e33; --muted:#5b5e85; --faint:#9a9cc0; }
 body.theme-claro{ background:radial-gradient(1100px 700px at 75% -10%,#e6e4ff 0%,var(--bg0) 55%) fixed var(--bg0); }
 body.theme-claro .grain{ opacity:.02; }
+/* fundos coloridos sempre com texto branco (independe do tema) */
+.btn-primary,.btn-danger,.btn-whatsapp,.btn-telegram,.msg.out .bubble{ color:#fff; }
+/* tema claro: cores de destaque mais escuras para contraste em fundo branco */
+body.theme-claro{ --cyan:#0a7f91; --green:#0f8a55; --amber:#a86400; --red:#c8243a; --blue:#1f62c4; --magenta:#c2185b; --violet:#5b4be8; }
+body.theme-claro ::-webkit-scrollbar-track{ background:var(--bg0); }
+body.theme-claro .topbar{ background:rgba(255,255,255,.82); }
+body.theme-claro .sidebar{ background:rgba(255,255,255,.94); }
+body.theme-claro .chat-head,body.theme-claro .composer{ background:rgba(255,255,255,.9); }
+body.theme-claro .demo-card{ background:rgba(255,255,255,.92); box-shadow:0 40px 90px -30px rgba(40,40,90,.25),0 0 60px -20px rgba(124,92,255,.25); }
+body.theme-claro .day-sep span,body.theme-claro .sys-pill,body.theme-claro .demo-sys{ background:rgba(255,255,255,.95); }
+body.theme-claro .drop-overlay{ background:rgba(242,243,250,.92); }
+body.theme-claro .modal,body.theme-claro .scrim{ background:rgba(28,30,51,.35); }
+body.theme-claro .fog-veil{ background:radial-gradient(900px 600px at 50% 40%, rgba(139,124,255,.22), rgba(242,243,250,.92) 75%); }
+body.theme-claro .msg.in .bubble{ box-shadow:0 2px 8px -4px rgba(40,40,90,.15); }
+body.theme-claro .dot-off{ background:#b5b7d0; }
+body.theme-claro .icon-btn.danger:hover{ color:var(--red); }
+body.theme-claro .qr-card canvas,body.theme-claro .qr-wrap canvas{ background:#fff; border:1px solid var(--line); }
 body.theme-contraste{ --bg0:#000; --bg1:#050505; --surface:#0a0a0a; --overlay:#141414; --line:#3a3a3a; --text:#fff; --muted:#d0d0d0; --faint:#a8a8a8; }
 body.theme-contraste .bubble{ border-width:2px; }
 .privacy-shield{ position:fixed; inset:0; z-index:9998; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px;
