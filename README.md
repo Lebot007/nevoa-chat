@@ -1,6 +1,6 @@
 # Névoa — chat anônimo e efêmero
 
-Conversa privada entre duas pessoas, direto de navegador para navegador.
+Conversa privada em grupo, para até 10 pessoas, cifrada ponta a ponta no navegador.
 Sem conta, sem banco de dados, sem histórico em servidores. Encerrou, evaporou.
 
 ## Use agora (sem instalar nada)
@@ -10,8 +10,8 @@ Site: https://lebot007.github.io/nevoa-chat/
 1. Abra o site acima.
 2. Clique em "Criar conversa privada" — o link é copiado automaticamente.
 3. Envie o link pelo WhatsApp ou Telegram (botões prontos na tela), ou copie.
-4. A outra pessoa abre o link e a conversa conecta sozinha.
-5. Mantenha a aba aberta enquanto conversam. "Encerrar e apagar tudo" remove mensagens, arquivos e chave dos dois lados.
+4. Até 9 pessoas abrem o link (10 no total, contando você) e entram sozinhas na conversa.
+5. Mantenha a aba aberta enquanto conversam. Só o anfitrião encerra para todos ("Encerrar e apagar para todos"); os outros podem "Sair da conversa" a qualquer momento.
 
 Não é preciso rodar servidor local, abrir terminal, configurar rede ou instalar qualquer coisa. As instruções de localhost abaixo são apenas para desenvolvedores que queiram editar o código.
 
@@ -19,22 +19,24 @@ Recebeu um convite? Abra o link direto, ou use "Tenho um convite" no site e cole
 
 ## Como funciona
 
-- O usuário 1 cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
-- O usuário 2 abre o link; os navegadores se encontram pelo broker público (PeerJS Cloud) e abrem um canal WebRTC P2P.
-- Se a conexão direta não fecha em 6 s (CGNAT, NAT simétrico, VPN, firewall), a conversa passa sozinha para uma rota de reserva: os mesmos quadros cifrados trafegam por brokers MQTT públicos via WebSocket. O status mostra "· relay".
-- Mensagens e arquivos são cifrados ponta a ponta antes de sair do navegador. Nenhum servidor guarda conteúdo.
-- Encerrar apaga mensagens, arquivos da RAM, histórico local cifrado e a chave, nos dois dispositivos.
+- O anfitrião cria a sala; a chave AES-256-GCM nasce no navegador e vai no fragmento (#) do link, que nunca é enviado a servidores.
+- Cada sala é um canal em brokers MQTT públicos (EMQX, HiveMQ, Eclipse, Mosquitto) via WebSocket seguro. Todos publicam e recebem no mesmo canal — é um grupão, todos falam com todos. Os brokers só repassam bytes já cifrados e não armazenam nada.
+- Os 4 brokers funcionam em paralelo: se um cai ou é bloqueado na rede de alguém, os outros seguem. Funciona em casas diferentes, 4G/5G e VPN (não depende de P2P).
+- O remetente de cada quadro é autenticado junto com a cifra (AES-GCM com dados associados): sem a chave ninguém forja mensagens.
+- Limite de 10 pessoas: quem chega espera ~3 s as apresentações; se já houver 10, recebe "Sala cheia". A ordem de chegada decide, igual para todos.
+- Se o anfitrião fechar a aba, os outros continuam conversando. Só ele pode encerrar para todos: o link carrega apenas o hash de um segredo que fica no navegador dele.
+- Qualquer participante pode apagar qualquer mensagem para todos; editar, só o autor.
 
 ## Recursos
 
-- Chat em tempo real com recibos, "digitando…", latência e sons com mudo
+- Chat em grupo (até 10) com lista de participantes, entradas/saídas, recibos (✓✓ azul quando todos leram), "Fulano está digitando…", latência e sons com mudo
 - Imagens com preview e lightbox; arquivos até 8 MB com progresso, cancelamento e reenvio
 - Cópia automática do convite, botões de WhatsApp/Telegram e compartilhamento nativo
 - Entrada por convite colado (auto-join ao colar um link válido)
 - Faixa de conexão em linguagem simples com "Tentar agora" e reconexão automática
 - Apelidos anônimos editáveis; textos cifrados no localStorage por até 12 h; arquivos só em RAM
 - 8 temas (Névoa, Meia-noite, Oceano, Floresta, Crepúsculo, Claro, Papel, Contraste) e cor de destaque personalizável
-- Layout responsivo, QR Code e sala limitada a duas pessoas
+- Layout responsivo, QR Code e sala limitada a 10 pessoas
 
 ## Rodar localmente (apenas desenvolvedores)
 
@@ -57,7 +59,7 @@ Use token classic com escopo repo e revogue depois em https://github.com/setting
 
 ## Privacidade
 
-O broker de sinalização vê os IPs dos participantes, mas não vê mensagens nem a chave. A descoberta de rota usa STUN público e, quando a conexão direta não fecha (CGNAT, 4G, NAT simétrico), cai no relay TURN público do PeerJS — o relay só repassa bytes já cifrados ponta a ponta. Se nem assim houver rota, entra o relay de reserva (brokers MQTT públicos: EMQX, HiveMQ, Eclipse, Mosquitto), que vê IPs e bytes cifrados, nunca a chave nem o conteúdo. Para testar essa rota, abra o site com `?relay=1` nos dois lados. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
+Os brokers públicos veem os IPs dos participantes e bytes cifrados — nunca a chave nem o conteúdo, e não guardam nada. Fechar a aba sem encerrar mantém histórico cifrado por até 12 h no seu dispositivo; use Encerrar para destruição imediata. Projeto educativo, sem auditoria formal.
 
 ## Licença
 

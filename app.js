@@ -10,25 +10,13 @@ const TTL = 12 * 3600 * 1000;            // histórico local cifrado: 12 h
 const MAX_STORE = 300;
 const PREFIX = 'nevoa-';
 const BASE_TITLE = 'Névoa — chat anônimo e efêmero';
-const PEER_URLS = [
-  'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
-  'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js'
-];
 const QR_URLS = [
   'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
   'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js'
 ];
-const PEER_OPTS = {
-  host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
-  config: { iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
-    // Relay TURN público do PeerJS (o mesmo da config padrão da lib). Sem ele, redes diferentes
-    // atrás de CGNAT/4G/NAT simétrico nunca fecham a conexão P2P ("conectando" infinito).
-    { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' }
-    // Para mais robustez, adicione um TURN próprio, ex.:
-    // { urls: ['turn:SEU_HOST:3478', 'turn:SEU_HOST:443?transport=tcp'], username: '...', credential: '...' }
-  ], sdpSemantics: 'unified-plan', iceCandidatePoolSize: 4 }
-};
+const MAX_MEMBERS = 10;               // contando o anfitrião
+const ADMIT_WAIT = 3500;              // ao entrar, espera as apresentações antes de contar a sala
+const WIRE_V = 2;                     // versão do quadro no fio
 const ANIMALS = ['Corvo','Raposa','Lince','Garça','Orca','Falcão','Jaguar','Coruja','Lobo','Axolote','Pantera','Grou'];
 const ADJS = ['Âmbar','Cobalto','Carmim','Violeta','Grafite','Turquesa','Escarlate','Índigo','Dourado','Prateado','Obsidiana','Ciano'];
 const AV = [['#7C5CFF','#B44DFF'],['#35E0E6','#2E7CFF'],['#FF4D9E','#FF8A5C'],['#3DDC97','#35E0E6'],
@@ -105,20 +93,22 @@ const ICONS = {
 };
 
 /* ───────── estado ───────── */
-function genMe(){ return { name: pick(ANIMALS) + ' ' + pick(ADJS), color: Math.floor(Math.random() * AV.length) }; }
+function genMe(){ return { name: pick(ANIMALS) + ' ' + pick(ADJS), color: Math.floor(Math.random() * AV.length), auto: true }; }
 const S = {
   role: null, roomId: null, keyB64: null, cryptoKey: null,
-  peer: null, conn: null, connected: false, wasConnected: false, ended: false,
-  view: 'landing', netState: 'idle', me: genMe(), peerProfile: null, peerTyping: false, greeted: false,
+  connected: false, wasConnected: false, ended: false, linkUp: false, admitted: false, admitAt: 0,
+  myId: null, myIdBytes: null, joinedAt: 0, members: new Map(), hostTag: null, hostSecret: null,
+  seen: new Map(), mySent: new Map(), sentAt: new Map(), leaveFrame: null, gone: new Map(),
+  view: 'landing', netState: 'idle', me: genMe(), greeted: false,
   messages: [], msgIndex: new Map(), msgNodes: new Map(),
   transfersIn: new Map(), transfersOut: new Map(), outFiles: new Map(), outQueue: [], outBusy: false,
   pendingReads: [], unread: 0, rtt: 0, lastDay: '', pillN: 0,
-  retryTimer: 0, dialTimeout: 0, pingTimer: 0, typingStop: 0, typingHide: 0, saveTimer: 0, lastTyping: 0,
+  typingStop: 0, saveTimer: 0, lastTyping: 0,
   storageOk: true, keyFails: 0, createdAt: 0, soundOn: true, qrLib: false, dragDepth: 0,
   replyTo: null, editingId: null, pinnedId: null, searchQuery: '',
-  presence: 'online', peerPresence: 'online',
+  presence: 'online',
   saltB64: null, hasPassword: false,
-  disconnects: 0, lastContact: 0,
+  disconnects: 0,
   blurOn: true, theme: 'nevoa', accent: '#8B7CFF',
   recorder: null, recChunks: [], recTimer: 0, recStart: 0
 };
@@ -217,31 +207,52 @@ function renderMe(){
   setAvatar($('#me-avatar'), S.me);
   $('#me-name').textContent = S.me.name;
   $('#me-role').textContent = 'você · ' + (S.role === 'host' ? 'anfitrião' : S.role === 'guest' ? 'convidado' : '—');
+  const host = S.role === 'host';
+  $('#btn-end-label').textContent = host ? 'Encerrar e apagar para todos' : 'Sair da conversa';
+  $('#btn-end-top').setAttribute('aria-label', host ? 'Encerrar para todos' : 'Sair da conversa');
+  $('#btn-end-top').title = host ? 'Encerrar para todos' : 'Sair da conversa';
 }
-function renderPeer(){
-  const p = S.peerProfile;
-  setAvatar($('#peer-avatar'), p); setAvatar($('#peer-avatar-h'), p);
-  $('#peer-name').textContent = p ? p.name : '—';
-  $('#peer-name-h').textContent = p ? p.name : 'Aguardando…';
+function renderMembers(){
+  const box = $('#member-list');
+  if (box) {
+    const list = admittedMembers();
+    box.innerHTML = list.length ? list.map(m => {
+      const c = AV[m.color % AV.length];
+      return `<div class="participant"><span class="avatar" style="background:linear-gradient(135deg,${c[0]},${c[1]})">${esc(m.name.charAt(0).toUpperCase())}</span>` +
+        `<div class="p-info"><span class="p-name">${esc(m.name)}</span><span class="p-role">${m.role === 'host' ? 'anfitrião' : 'convidado'}${m.presence === 'away' ? ' · ausente' : ''}</span></div>` +
+        `<span class="dot dot-${m.presence === 'away' ? 'warn' : 'on'}"></span></div>`;
+    }).join('') : '<p class="member-empty">Ninguém mais por aqui ainda. Envie o link — cabem até ' + MAX_MEMBERS + ' pessoas.</p>';
+  }
+  const n = admittedMembers().length + (S.admitted ? 1 : 0);
+  $('#member-count').textContent = n + '/' + MAX_MEMBERS;
+  const av = $('#peer-avatar-h');
+  av.classList.remove('avatar-ghost'); av.classList.add('avatar-group');
+  av.textContent = String(Math.max(1, n));
+  $('#peer-name-h').textContent = 'Conversa em grupo';
+}
+function typingText(){
+  const t = admittedMembers().filter(m => m.typing);
+  if (!t.length) return '';
+  return t.length === 1 ? t[0].name + ' está digitando' : t.length + ' pessoas digitando';
 }
 function refreshStatus(){
   const on = S.connected;
+  const others = admittedMembers().length;
+  const typing = on ? typingText() : '';
   let txt, cls;
-  if (on) { txt = S.peerTyping ? 'digitando' : (S.peerPresence === 'away' ? 'ausente · criptografado' : 'online · criptografado') + ((S.conn && S.conn.relay && !S.peerTyping) ? ' · relay' : ''); cls = 'on'; }
-  else {
-    const map = { waiting:['aguardando convite…','warn'], connecting:['conectando…','warn'], handshake:['trocando chaves…','warn'],
-      retry:['reconectando…','warn'], 'host-offline':['aguardando anfitrião…','warn'], signal:['reconectando ao sinal…','warn'],
-      waitreturn:['aguardando retorno…','warn'], idle:['—','off'] };
+  if (on) {
+    txt = others ? (others + 1) + ' na conversa · criptografado' : 'só você por enquanto · criptografado';
+    cls = 'on';
+  } else {
+    const map = { waiting:['aguardando pessoas…','warn'], connecting:['conectando…','warn'], joining:['entrando na sala…','warn'],
+      retry:['reconectando…','warn'], idle:['—','off'] };
     [txt, cls] = map[S.netState] || ['offline','off'];
   }
-  $('#peer-status-h').innerHTML = (on && S.peerTyping)
-    ? 'digitando<span class="tdots"><i></i><i></i><i></i></span>' : esc(txt);
+  $('#peer-status-h').innerHTML = typing ? esc(typing) + '<span class="tdots"><i></i><i></i><i></i></span>' : esc(txt);
   $('#room-status-dot').className = 'dot dot-' + cls;
   $('#room-status-text').textContent = txt;
-  $('#peer-status').className = 'dot dot-' + (on ? 'on' : 'off');
-  $('#peer-role').textContent = S.peerProfile ? (S.role === 'host' ? 'convidado' : 'anfitrião') : 'aguardando';
-  waitStatus.textContent = (S.role === 'host' && !on)
-    ? (S.netState === 'signal' ? 'Reconectando ao servidor de sinal…' : 'Aguardando a outra pessoa entrar…') : txt;
+  waitStatus.textContent = !on ? (S.linkUp ? 'Entrando na sala…' : 'Conectando ao relay cifrado…')
+    : (others ? txt : 'Aguardando pessoas entrarem… (até ' + MAX_MEMBERS + ')');
   latency.hidden = !on;
   updateSendBtn();
   refreshConnHelp();
@@ -251,62 +262,38 @@ function renderLatency(){
   latency.textContent = S.rtt + ' ms';
   latency.dataset.q = S.rtt < 150 ? 'good' : S.rtt < 400 ? 'ok' : 'bad';
 }
-function showTyping(on){
-  S.peerTyping = !!on && S.connected;
-  refreshStatus();
-  clearTimeout(S.typingHide);
-  if (S.peerTyping) S.typingHide = setTimeout(() => { S.peerTyping = false; refreshStatus(); }, 3500);
-}
 
 /* ───────── criptografia ───────── */
 const importKey = bytes => crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM' }, false, ['encrypt','decrypt']);
-async function makeFrame(type, plain){
-  const iv = rand(12);
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, S.cryptoKey, plain));
-  const f = new Uint8Array(13 + ct.length);
-  f[0] = type; f.set(iv, 1); f.set(ct, 13);
+// quadro no fio: [versão][remetente 8][iv 12][cifra]. Versão e remetente entram como AAD:
+// ninguém consegue trocar o remetente de um quadro sem a chave.
+async function makeFrame(kind, body){
+  const iv = rand(12), head = new Uint8Array(9);
+  head[0] = WIRE_V; head.set(S.myIdBytes, 1);
+  const plain = new Uint8Array(1 + body.length); plain[0] = kind; plain.set(body, 1);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: head }, S.cryptoKey, plain));
+  const f = new Uint8Array(21 + ct.length); f.set(head, 0); f.set(iv, 9); f.set(ct, 21);
   return f;
 }
-async function sendJSON(o){
-  if (!S.conn || !S.conn.open || !S.cryptoKey || S.ended) return false;
-  try { const f = await makeFrame(1, te.encode(JSON.stringify(o))); S.conn.send(f.buffer); return true; }
+async function sendJSON(o, opts){
+  if (!S.cryptoKey || S.ended || !S.myIdBytes || !R.on) return false;
+  try { const f = await makeFrame(1, te.encode(JSON.stringify(o))); return netSend(f, opts); }
   catch { return false; }
-}
-async function toU8(d){
-  if (d instanceof Uint8Array) return d;
-  if (d instanceof ArrayBuffer) return new Uint8Array(d);
-  if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
-  if (d && typeof d.arrayBuffer === 'function') return new Uint8Array(await d.arrayBuffer());
-  return null;
 }
 function keyFail(){
   S.keyFails++;
   if (S.keyFails === 1) toast('error', 'Falha de criptografia — o link pode estar incorreto.');
   if (S.keyFails >= 3 && !S.connected) showError('As chaves não conferem. Peça um novo link ao anfitrião.');
 }
-async function onData(raw){
-  const f = await toU8(raw);
-  if (!f || f.length < 14 || !S.cryptoKey || S.ended) return;
-  let pt;
-  try { pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: f.slice(1, 13) }, S.cryptoKey, f.slice(13))); }
-  catch { keyFail(); return; }
-  if (f[0] === 1) {
-    let o; try { o = JSON.parse(td.decode(pt)); } catch { return; }
-    if (o && typeof o.t === 'string') handle(o);
-  } else if (f[0] === 2) {
-    if (pt.length < 20) return;
-    onChunk(hex(pt.slice(0, 16)), new DataView(pt.buffer, pt.byteOffset, pt.byteLength).getUint32(16), pt.slice(20));
-  }
-}
-
 /* ───────── persistência local cifrada ───────── */
-const skey = () => 'nevoa:v1:' + S.roomId;
+const skey = () => 'nevoa:v1:' + S.roomId + ':' + S.myId;   // por participante: abas no mesmo navegador não se misturam
 const rkey = (id) => 'nevoa:role:' + (id || S.roomId);
 function buildPayload(){
   return {
-    v: 1, createdAt: S.createdAt, me: S.me, peer: S.peerProfile, greeted: S.greeted, pinnedId: S.pinnedId,
+    v: 1, createdAt: S.createdAt, me: S.me, greeted: S.greeted, pinnedId: S.pinnedId,
     messages: S.messages.slice(-MAX_STORE).map(m => {
       const b = { id: m.id, kind: m.kind, dir: m.dir, ts: m.ts, status: m.status };
+      if (m.from) { b.from = m.from; b.fromName = m.fromName; b.fromColor = m.fromColor; }
       if (m.replyTo) b.replyTo = m.replyTo;
       if (m.reactions && Object.keys(m.reactions).length) b.reactions = m.reactions;
       if (m.edited) b.edited = true;
@@ -341,10 +328,9 @@ async function restore(){
     if (d.v !== 1) return;
     S.createdAt = d.createdAt || Date.now();
     if (d.me && d.me.name) S.me = d.me;
-    if (d.peer && d.peer.name) S.peerProfile = d.peer;
     S.greeted = !!d.greeted;
     if (d.pinnedId) S.pinnedId = d.pinnedId;
-    (d.messages || []).forEach(m => { S.messages.push(m); S.msgIndex.set(m.id, m); appendMessage(m, true); });
+    (d.messages || []).forEach(m => { normReactions(m); S.messages.push(m); S.msgIndex.set(m.id, m); appendMessage(m, true); });
     if (S.messages.length) {
       const sm = sysMsg('Histórico local restaurado — cifrado apenas neste dispositivo.', 'info');
       S.messages.push(sm); S.msgIndex.set(sm.id, sm); appendMessage(sm, true);
@@ -366,52 +352,15 @@ function sweepStorage(){
   } catch {}
 }
 
-/* ───────── rede / PeerJS ───────── */
-function startPing(){
-  clearInterval(S.pingTimer);
-  sendJSON({ t: 'ping', ts: Date.now() });
-  S.pingTimer = setInterval(() => { if (S.connected) sendJSON({ t: 'ping', ts: Date.now() }); }, 6000);
-}
-function stopPing(){ clearInterval(S.pingTimer); S.pingTimer = 0; }
-
-function attachConn(c){
-  if (S.ended) { try { c.close(); } catch {} return; }
-  if (S.conn && S.conn !== c) { try { S.conn.close(); } catch {} }
-  S.conn = c; S.connected = false;
-  c.on('open', () => {
-    if (S.ended) return;
-    clearTimeout(S.dialTimeout);
-    setStatus('handshake');
-    sendJSON({ t: 'hello', v: 1, name: S.me.name, color: S.me.color, role: S.role });
-    sendJSON({ t: 'presence', state: S.presence });
-    startPing();
-    if (S.view === 'waiting') showView('chat');
-  });
-  c.on('data', onData);
-  c.on('close', () => {
-    if (S.ended || S.conn !== c) return;
-    const was = S.connected;
-    S.connected = false; S.peerTyping = false;
-    if (was) S.disconnects++;
-    stopPing(); renderQuality();
-    if (was) { pushMessage(sysMsg('Conexão interrompida — tentando restabelecer.', 'info')); sound('error'); }
-    if (S.role === 'guest') { setStatus('retry'); scheduleRetry(1400 + Math.random() * 900); }
-    else setStatus('waitreturn');
-  });
-  c.on('error', () => {});
-}
-
-/* ───────── rota de reserva: relay cifrado (MQTT público sobre WebSocket) ─────────
-   Quando o P2P não fecha (NAT simétrico, CGNAT dos dois lados, VPN, firewall), os dois
-   navegadores trocam os MESMOS quadros AES-256-GCM por um broker público. O broker só
-   vê bytes cifrados; a chave continua apenas no link. */
+/* ───────── rede em grupo: canal cifrado no relay (MQTT público sobre WebSocket) ─────────
+   Cada sala é um canal. Todos publicam e recebem nele; os quadros já saem cifrados
+   (AES-256-GCM) do navegador. Os brokers só veem bytes cifrados — a chave fica no link.
+   Vários brokers em paralelo: se um cai ou é bloqueado na rede de alguém, os outros seguem. */
 const RELAY_URLS = [
   'wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt',
   'wss://mqtt.eclipseprojects.io/mqtt', 'wss://test.mosquitto.org:8081/mqtt'
 ];
-const FORCE_RELAY = /[?&]relay=1/.test(location.search);   // teste: pula o P2P
-const RELAY_AFTER = FORCE_RELAY ? 0 : 6000;                // espera o P2P por 6 s antes de usar o relay
-const R = { on: false, gen: 0, links: [], sid: null, sub: '', pub: '', tick: 0, needSince: 0, used: false, fullSince: 0 };
+const R = { on: false, gen: 0, links: [], topic: '', hb: 0, prune: 0, lastAnnounce: 0 };
 
 function mqttPacket(head, ...parts){
   let len = 0; parts.forEach(p => { len += p.length; });
@@ -423,24 +372,24 @@ function mqttPacket(head, ...parts){
 }
 const mqttStr = str => { const b = te.encode(str); const o = new Uint8Array(2 + b.length); o[0] = b.length >> 8; o[1] = b.length & 255; o.set(b, 2); return o; };
 
-function relayLink(url, gen){
-  const L = { url, ws: null, ready: false, dead: false, ka: 0, buf: new Uint8Array(0) };
-  const retry = () => { if (!L.dead && R.gen === gen) setTimeout(open, 4000 + Math.random() * 2000); };
+function relayLink(url, idx, gen){
+  const L = { url, idx, ws: null, ready: false, dead: false, ka: 0, timer: 0, buf: new Uint8Array(0) };
+  const schedule = ms => { clearTimeout(L.timer); if (!L.dead && R.gen === gen) L.timer = setTimeout(open, ms); };
   function packet(first, body){
     const type = first >> 4, ws = L.ws;
     if (type === 2) {                                   // CONNACK
       if (body[1] !== 0) { try { ws.close(); } catch {} return; }
-      ws.send(mqttPacket(0x82, [0, 1], mqttStr(R.sub), [0]));
-    } else if (type === 9) {                            // SUBACK
+      ws.send(mqttPacket(0x82, [0, 1], mqttStr(R.topic), [0]));
+    } else if (type === 9) {                            // SUBACK: pronto para conversar
       L.ready = true;
-      if (S.role === 'host' && !S.connected) relayCtl(5, rand(8)).then(f => L.pub(f)).catch(() => {});   // avisa: voltei
       clearInterval(L.ka);
       L.ka = setInterval(() => { try { if (ws.readyState === 1) ws.send(new Uint8Array([0xC0, 0])); } catch {} }, 20000);
+      onLinkChange();
     } else if (type === 3) {                            // PUBLISH
       if (body.length < 2) return;
       let p = 2 + ((body[0] << 8) | body[1]);
       if ((first >> 1) & 3) p += 2;
-      if (p <= body.length) relayRecv(L, body.slice(p));
+      if (p <= body.length) wireRecv(body.slice(p));
     }
   }
   function feed(chunk){
@@ -457,260 +406,261 @@ function relayLink(url, gen){
     }
   }
   function open(){
+    clearTimeout(L.timer); L.timer = 0;
     if (L.dead || R.gen !== gen) return;
+    if (L.ws && L.ws.readyState <= 1) return;
     let ws;
-    try { ws = new WebSocket(url, 'mqtt'); } catch { retry(); return; }
+    try { ws = new WebSocket(url, 'mqtt'); } catch { schedule(5000); return; }
     ws.binaryType = 'arraybuffer'; L.ws = ws; L.buf = new Uint8Array(0);
     ws.onopen = () => { try { ws.send(mqttPacket(0x10, mqttStr('MQTT'), [4, 2, 0, 60], mqttStr('nv' + uid() + uid().slice(0, 4)))); } catch {} };
     ws.onmessage = e => { if (e.data instanceof ArrayBuffer) feed(new Uint8Array(e.data)); };
     ws.onerror = () => {};
     ws.onclose = () => {
       if (L.ws !== ws) return;
+      const was = L.ready;
       L.ready = false; clearInterval(L.ka);
-      const c = S.conn;
-      if (c && c.relay && c.link === L) c.drop();
-      retry();
+      if (was) onLinkChange();
+      schedule(4000 + Math.random() * 2000);
     };
   }
-  L.pub = payload => { try { if (L.ready && L.ws.readyState === 1) { L.ws.send(mqttPacket(0x30, mqttStr(R.pub), payload)); return true; } } catch {} return false; };
-  L.close = () => { L.dead = true; clearInterval(L.ka); try { L.ws.close(); } catch {} };
+  L.pub = payload => { try { if (L.ready && L.ws.readyState === 1) { L.ws.send(mqttPacket(0x30, mqttStr(R.topic), payload)); return true; } } catch {} return false; };
+  L.kick = () => { if (!L.ready && (!L.ws || L.ws.readyState > 1)) open(); };
+  L.close = () => { L.dead = true; clearTimeout(L.timer); clearInterval(L.ka); try { L.ws.close(); } catch {} };
   open();
   return L;
 }
+const readyLinks = () => R.links.filter(l => l.ready);
+const linkMask = () => R.links.reduce((m, l, i) => l.ready ? m | (1 << i) : m, 0);
 
-/* quadro do relay: [tipo 1][sessão 8][corpo] — 1 SYN · 2 ACK · 3 DADOS · 4 TCHAU (controle vai cifrado e com hora) */
-async function relayCtl(type, sid){
-  const body = await makeFrame(1, te.encode(JSON.stringify({ t: 'relay', ts: Date.now() })));
-  const f = new Uint8Array(9 + body.length); f[0] = type; f.set(sid, 1); f.set(body, 9);
-  return f;
-}
-async function relayCtlOk(body){
-  if (body.length < 14 || !S.cryptoKey) return false;
-  try {
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: body.slice(1, 13) }, S.cryptoKey, body.slice(13));
-    const o = JSON.parse(td.decode(new Uint8Array(pt)));
-    return o && o.t === 'relay' && Math.abs(Date.now() - Number(o.ts)) < 180000;
-  } catch { return false; }
-}
-function relayConn(L, sid){
-  const h = {}; let wd = 0, bye = null;
-  const prep = () => relayCtl(4, sid).then(f => { bye = f; }).catch(() => {});
-  prep(); const byeT = setInterval(prep, 60000);
-  const c = {
-    relay: true, open: true, link: L, sidHex: hex(sid),
-    on(e, f){ (h[e] = h[e] || []).push(f); },
-    emit(e, a){ (h[e] || []).slice().forEach(f => { try { f(a); } catch {} }); },
-    send(buf){
-      if (!c.open) return;
-      const u = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-      const f = new Uint8Array(9 + u.length); f[0] = 3; f.set(sid, 1); f.set(u, 9);
-      L.pub(f);
-    },
-    // abas em segundo plano têm timers atrasados (até 1/min): a folga precisa cobrir isso
-    touch(){ clearTimeout(wd); wd = setTimeout(() => c.drop(), 75000); },
-    drop(){ if (!c.open) return; c.open = false; clearTimeout(wd); clearInterval(byeT); c.emit('close'); },
-    // TCHAU já cifrado de antemão: ao fechar a aba não dá tempo de cifrar (é assíncrono)
-    close(){ if (!c.open) return; if (bye) L.pub(bye); else relayCtl(4, sid).then(f => L.pub(f)).catch(() => {}); c.drop(); },
-    get bufferedAmount(){ return L.ws ? L.ws.bufferedAmount : 0; }
-  };
-  c.touch();
-  return c;
-}
-let relayQ = Promise.resolve();   // fila: dados nunca passam na frente do aceite
-function relayRecv(L, d){ relayQ = relayQ.then(() => relayIn(L, d)).catch(() => {}); }
-async function relayIn(L, d){
-  if (!R.on || S.ended || d.length < 9) return;
-  const type = d[0], sid = d.slice(1, 9), sidHex = hex(sid), body = d.subarray(9);
-  if (type === 3) {
-    const c = S.conn;
-    if (c && c.relay && c.open && c.link === L && c.sidHex === sidHex) { c.touch(); c.emit('data', body); }
-    return;
-  }
-  if (S.role === 'guest' && type !== 5 && sidHex !== hex(R.sid)) return;
-  if (!(await relayCtlOk(body))) return;
-  const ack = (S.role === 'host' && type === 1) ? await relayCtl(2, sid) : null;
-  if (!R.on || S.ended) return;
-  const c = S.conn && S.conn.relay ? S.conn : null;       // relido depois dos awaits
-  if (type === 4) { if (c && c.sidHex === sidHex) c.drop(); return; }
-  if (S.role === 'guest' && type === 5) {                  // anfitrião voltou: a sessão antiga morreu com ele
-    if (c && c.open) c.drop();
-    relayCtl(1, R.sid).then(f => R.links.forEach(l => l.pub(f))).catch(() => {});
-    return;
-  }
-  if (S.role === 'guest' && type === 6) {                  // sala cheia — só desiste se persistir (pode ser sessão zumbi nossa)
-    if (S.connected) return;
-    if (!R.fullSince) R.fullSince = Date.now();
-    else if (Date.now() - R.fullSince > 25000) wipe('full');
-    return;
-  }
-  if (S.role === 'host' && type === 1) {
-    if (c && c.open && c.sidHex === sidHex) { if (c.link === L) L.pub(ack); return; }   // ACK perdido: repete
-    const live = S.conn && S.conn.open && S.connected && Date.now() - (S.lastContact || 0) < 15000;
-    if (live) { relayCtl(6, sid).then(f => L.pub(f)).catch(() => {}); return; }        // sala ocupada
-    const rc = relayConn(L, sid);
-    attachConn(rc); L.pub(ack); rc.emit('open');
-  } else if (S.role === 'guest' && type === 2) {
-    if (S.conn && S.conn.open) return;
-    R.fullSince = 0;
-    const rc = relayConn(L, R.sid);
-    attachConn(rc); rc.emit('open');
-  }
-}
-function relayTick(){
-  if (!R.on || S.ended || S.role !== 'guest') return;
-  const c = S.conn;
-  if (c && c.open) {
-    R.needSince = 0;
-    if (c.relay) {
-      R.used = true;
-      // sem resposta aos pings: sessão morta (anfitrião caiu sem avisar). Aba oculta tem timers lentos.
-      if (S.connected && Date.now() - (S.lastContact || 0) > (document.hidden ? 90000 : 25000)) c.drop();
+/* envio: texto/controle vai por todos os brokers prontos (redundância; quem recebe descarta duplicatas).
+   Arquivos vão só pelo menor conjunto de brokers que alcança todo mundo (economiza dados). */
+function coverLinks(){
+  const ready = R.links.filter(l => l.ready);
+  let left = admittedMembers().map(m => m.ln || 0).filter(x => x);
+  const pick = [];
+  while (left.length) {
+    let best = null, bc = 0;
+    for (const l of ready) {
+      if (pick.includes(l)) continue;
+      const c = left.filter(x => x & (1 << l.idx)).length;
+      if (c > bc) { bc = c; best = l; }
     }
+    if (!best) break;
+    pick.push(best); left = left.filter(x => !(x & (1 << best.idx)));
+  }
+  return pick.length ? pick : ready.slice(0, 1);
+}
+function netSend(f, opts = {}){
+  const ls = opts.cover ? coverLinks() : readyLinks();
+  let n = 0; ls.forEach(l => { if (l.pub(f)) n++; });
+  if (n) {
+    const k = hex(f.subarray(9, 21));
+    S.mySent.set(k, Date.now()); trimMap(S.mySent, 3000);
+    if (opts.rtt) S.sentAt.set(k, Date.now()), trimMap(S.sentAt, 200);
+  }
+  return n > 0;
+}
+function trimMap(m, max){ if (m.size <= max) return; const it = m.keys(); while (m.size > max * .8) m.delete(it.next().value); }
+
+/* recebimento em fila: decifrar é assíncrono, a fila mantém a ordem de chegada */
+let wireQ = Promise.resolve();
+function wireRecv(d){ wireQ = wireQ.then(() => onWire(d)).catch(() => {}); }
+async function onWire(f){
+  if (S.ended || !S.cryptoKey || !S.myId || f.length < 22 || f[0] !== WIRE_V) return;
+  const from = hex(f.subarray(1, 9)), k = hex(f.subarray(9, 21));
+  if (S.seen.has(k)) return;                             // mesma mensagem por outro broker
+  S.seen.set(k, 1); trimMap(S.seen, 6000);
+  if (from === S.myId) {
+    if (S.mySent.has(k)) {                               // eco do que eu mesmo mandei: mede a latência
+      const t0 = S.sentAt.get(k);
+      if (t0) { S.sentAt.delete(k); S.rtt = Math.max(1, Date.now() - t0); renderLatency(); renderQuality(); }
+      return;
+    }
+    newIdentity();                                       // outra aba (duplicada) usa o meu id: troco o meu
     return;
   }
-  if (!R.needSince) R.needSince = Date.now();
-  if (!R.used && Date.now() - R.needSince < RELAY_AFTER) return;   // 1ª vez: dá chance ao P2P
-  relayCtl(1, R.sid).then(f => { R.links.forEach(l => l.pub(f)); }).catch(() => {});
+  let pt;
+  try { pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: f.slice(9, 21), additionalData: f.slice(0, 9) }, S.cryptoKey, f.slice(21))); }
+  catch { keyFail(); return; }
+  if (S.ended || pt.length < 1) return;
+  if (pt[0] === 1) {
+    let o; try { o = JSON.parse(td.decode(pt.subarray(1))); } catch { return; }
+    if (o && typeof o.t === 'string') handle(o, from);
+  } else if (pt[0] === 2) {
+    const b = pt.subarray(1);
+    if (b.length < 20) return;
+    const mb = S.members.get(from); if (mb) mb.lastSeen = Date.now();
+    onChunk(hex(b.slice(0, 16)), new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(16), b.slice(20), from);
+  }
 }
+
+/* ───────── participantes ───────── */
+const byJoin = (a, b) => (a.joinedAt - b.joinedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const admittedMembers = () => [...S.members.values()].filter(m => m.adm).sort(byJoin);
+const memberName = id => { const m = S.members.get(id); return m ? m.name : 'Alguém'; };
+function idKey(){ return 'nevoa:me:' + S.roomId; }
+function loadIdentity(){
+  let o = null;
+  try { o = JSON.parse(sessionStorage.getItem(idKey()) || 'null'); } catch {}
+  if (o && /^[0-9a-f]{16}$/.test(o.id) && Number(o.joinedAt) > 0) { S.myId = o.id; S.joinedAt = Number(o.joinedAt); }
+  else { S.myId = hex(rand(8)); S.joinedAt = Date.now(); }
+  S.myIdBytes = new Uint8Array(S.myId.match(/../g).map(h => parseInt(h, 16)));
+  saveIdentity();
+}
+function saveIdentity(){ try { sessionStorage.setItem(idKey(), JSON.stringify({ id: S.myId, joinedAt: S.joinedAt })); } catch {} }
+function newIdentity(){
+  S.myId = hex(rand(8)); S.myIdBytes = new Uint8Array(S.myId.match(/../g).map(h => parseInt(h, 16)));
+  saveIdentity(); announce(false, true);
+}
+function helloPayload(re){
+  return { t: 'hello', re: re ? 1 : 0, v: 2, name: S.me.name, color: S.me.color, role: S.role,
+    joinedAt: S.joinedAt, adm: S.admitted ? 1 : 0, presence: S.presence, ln: linkMask() };
+}
+function announce(re, force){
+  if (!R.on || S.ended) return;
+  if (!re && !force && Date.now() - R.lastAnnounce < 1500) return;
+  if (!re) R.lastAnnounce = Date.now();
+  sendJSON(helloPayload(re), { rtt: true });
+  prepLeave();
+}
+async function prepLeave(){             // "saí" já cifrado: ao fechar a aba não dá tempo de cifrar
+  try { S.leaveFrame = await makeFrame(1, te.encode(JSON.stringify({ t: 'leave' }))); } catch {}
+}
+function onLinkChange(){
+  const up = readyLinks().length > 0;
+  if (up && !S.linkUp) {
+    S.linkUp = true;
+    if (!S.admitAt) S.admitAt = Date.now() + (S.role === 'host' ? 0 : ADMIT_WAIT);
+    if (S.wasConnected) S.disconnects++;
+  } else if (!up && S.linkUp) S.linkUp = false;
+  if (up) announce(false);              // apresenta-se (todos respondem) — também informa os brokers que alcanço
+  setTimeout(checkAdmission, S.admitAt ? Math.max(0, S.admitAt - Date.now()) + 30 : 0);
+  updateConn();
+}
+function checkAdmission(){
+  if (S.admitted || S.ended || !S.linkUp || !S.admitAt || Date.now() < S.admitAt) return;
+  const now = Date.now();
+  const list = [...S.members.values()].filter(m => now - m.lastSeen < memberTTL(m));
+  list.push({ id: S.myId, joinedAt: S.joinedAt });
+  list.sort(byJoin);
+  if (list.findIndex(x => x.id === S.myId) >= MAX_MEMBERS) {
+    sendJSON({ t: 'leave' }).finally(() => wipe('full'));
+    return;
+  }
+  S.admitted = true;
+  // apelido automático repetido na sala? sorteia outro (apelido escolhido pela pessoa não é mexido)
+  if (S.me.auto !== false) {
+    const taken = new Set(admittedMembers().map(m => m.name));
+    for (let i = 0; i < 40 && taken.has(S.me.name); i++) S.me.name = pick(ANIMALS) + ' ' + pick(ADJS);
+    renderMe();
+  }
+  announce(false, true);                // agora como participante admitido
+  admittedMembers().forEach(m => { m.shown = true; });
+  if (!S.greeted) {
+    S.greeted = true;
+    pushMessage(sysMsg('Conversa em grupo protegida com criptografia ponta a ponta (AES-256-GCM). Até ' + MAX_MEMBERS + ' pessoas.'));
+  } else pushMessage(sysMsg('Você voltou à conversa.', 'info'));
+  if (S.view === 'waiting' && admittedMembers().length) showView('chat');
+  sound('connect'); fogDissipate();
+  renderMembers(); updateConn(); flushReads(); saveSoon();
+}
+const memberTTL = m => m.presence === 'away' ? 150000 : 35000;   // aba oculta: navegador atrasa os timers
+function pruneMembers(){
+  const now = Date.now();
+  S.members.forEach(m => { if (now - m.lastSeen > memberTTL(m)) removeMember(m.id, false); });
+  checkAdmission();
+}
+function removeMember(id, announced){
+  const m = S.members.get(id);
+  if (!m) return;
+  clearTimeout(m.typingTimer);
+  S.members.delete(id);
+  if (m.shown) { S.gone.set(id, Date.now()); trimMap(S.gone, 200); }
+  if (m.shown && S.admitted && !S.ended) {
+    // se for só um F5, a pessoa volta em segundos com o mesmo id: não poluímos a conversa
+    const name = m.name;
+    setTimeout(() => { if (!S.ended && !S.members.has(id)) { pushMessage(sysMsg(name + ' saiu da conversa.', 'info')); } }, announced ? 8000 : 0);
+  }
+  renderMembers(); refreshStatus();
+}
+function updateConn(){
+  const was = S.connected;
+  S.connected = !S.ended && S.linkUp && S.admitted;
+  if (S.connected && !was) S.wasConnected = true;
+  if (!S.linkUp) setStatus(S.wasConnected ? 'retry' : 'connecting');
+  else if (!S.admitted) setStatus('joining');
+  else setStatus('online');
+}
+
 function relayStop(){
   R.on = false; R.gen++;
-  clearInterval(R.tick); R.tick = 0;
+  clearInterval(R.hb); clearInterval(R.prune); R.hb = R.prune = 0;
   const ls = R.links; R.links = [];
-  setTimeout(() => ls.forEach(l => l.close()), 700);     // dá tempo do TCHAU sair
+  setTimeout(() => ls.forEach(l => l.close()), 700);     // dá tempo do "saí" sair
+  S.linkUp = false;
 }
 async function relayStart(){
   relayStop();
-  const gen = R.gen, role = S.role, room = S.roomId;
-  if (!room || !window.WebSocket) return;
+  const gen = R.gen, room = S.roomId;
+  if (!room) return;
+  if (!window.WebSocket) { showError('Este navegador não suporta WebSocket. Atualize o navegador.'); return; }
   let d;
   try { d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode('nevoa-relay:' + room))); } catch { return; }
   if (R.gen !== gen || S.ended || S.roomId !== room) return;
-  const base = 'nevoa/' + hex(d.slice(0, 16));
-  R.sub = base + (role === 'host' ? '/g' : '/h'); R.pub = base + (role === 'host' ? '/h' : '/g');
-  R.sid = rand(8); R.needSince = Date.now(); R.on = true; R.used = false; R.fullSince = 0;
-  R.links = RELAY_URLS.map(u => relayLink(u, gen));
-  if (role === 'guest') R.tick = setInterval(relayTick, 2000);
+  R.topic = 'nevoa/' + hex(d.slice(0, 16)) + '/all';
+  R.on = true;
+  R.links = RELAY_URLS.map((u, i) => relayLink(u, i, gen));
+  R.hb = setInterval(() => { if (S.linkUp) announce(true); }, 10000);     // batimento: presença e latência
+  R.prune = setInterval(pruneMembers, 5000);
+  updateConn();
 }
-
-function initHost(attempt){
-  if (S.ended) return;
-  const p = new Peer(PREFIX + S.roomId, PEER_OPTS);
-  S.peer = p;
-  p.on('open', () => { if (!S.ended && !S.connected) setStatus(S.view === 'waiting' ? 'waiting' : 'waitreturn'); });
-  p.on('connection', c => {
-    if (S.ended) { try { c.close(); } catch {} return; }
-    // sala cheia: só dois. Se a conexão atual está viva (contato recente), recusa a nova;
-    // se está morta/zumbi, aceita (é o convidado reconectando).
-    const live = S.conn && S.conn.open && S.connected && Date.now() - (S.lastContact || 0) < 15000;
-    if (live) {
-      c.on('open', async () => {
-        try { const f = await makeFrame(1, te.encode(JSON.stringify({ t: 'full' }))); c.send(f.buffer); } catch {}
-        setTimeout(() => { try { c.close(); } catch {} }, 400);
-      });
-      return;
-    }
-    attachConn(c);
-  });
-  p.on('disconnected', () => {
-    if (S.ended || p.destroyed) return;
-    setStatus('signal');
-    setTimeout(() => { if (!S.ended && !p.destroyed) { try { p.reconnect(); } catch {} } }, 1800);
-  });
-  p.on('error', e => {
-    if (S.ended) return;
-    const t = e && e.type;
-    if (t === 'unavailable-id') {
-      try { p.destroy(); } catch {}
-      if (attempt < 8) setTimeout(() => { if (!S.ended) initHost(attempt + 1); }, 1600);
-      else showError('A sala não pôde ser registrada no servidor de sinal. Recarregue para tentar de novo.');
-    } else if (['network','server-error','socket-error','socket-closed','ssl-unavailable'].includes(t)) {
-      if (!S.connected) setStatus('signal');
-      setTimeout(() => {
-        if (S.ended) return;
-        if (p.destroyed) initHost(attempt);
-        else { try { p.reconnect(); } catch { initHost(attempt); } }
-      }, 2600);
-    }
-  });
-}
-
-function initGuest(){
-  if (S.ended) return;
-  const p = new Peer(undefined, PEER_OPTS);
-  S.peer = p;
-  p.on('open', dial);
-  p.on('disconnected', () => {
-    if (S.ended || p.destroyed) return;
-    setStatus('signal');
-    setTimeout(() => { if (!S.ended && !p.destroyed) { try { p.reconnect(); } catch {} } }, 2000);
-  });
-  p.on('error', e => {
-    if (S.ended) return;
-    const t = e && e.type;
-    if (S.conn && S.conn.open) return;                  // já conectado pelo relay
-    if (t === 'peer-unavailable') { setStatus('host-offline'); scheduleRetry(3200); }
-    else if (['network','server-error','socket-error','socket-closed','ssl-unavailable'].includes(t)) {
-      setStatus('signal'); scheduleRetry(3000);
-    }
-  });
-}
-function dial(){
-  const p = S.peer;
-  if (S.ended || !p || p.destroyed || !p.open) return;
-  if (FORCE_RELAY || (S.conn && S.conn.open)) return;
-  setStatus('connecting');
-  const c = p.connect(PREFIX + S.roomId, { reliable: true, serialization: 'binary', metadata: { app: 'nevoa', v: 1 } });
-  attachConn(c);
-  clearTimeout(S.dialTimeout);
-  S.dialTimeout = setTimeout(() => {
-    if (!S.ended && S.conn === c && !c.open) {
-      try { c.close(); } catch {}
-      setStatus('host-offline'); scheduleRetry(2500);
-    }
-  }, 25000);   // via relay TURN a negociação ICE pode levar mais que 12 s
-}
-function scheduleRetry(ms){
-  clearTimeout(S.retryTimer);
-  S.retryTimer = setTimeout(() => {
-    if (S.ended) return;
-    const p = S.peer;
-    if (!p || p.destroyed) { initGuest(); return; }
-    if (p.open) dial();
-    else { try { p.reconnect(); } catch { initGuest(); } }
-  }, ms);
-}
+function kickLinks(){ R.links.forEach(l => l.kick()); }
 
 /* ───────── protocolo ───────── */
-function handle(o){
+function handle(o, from){
   if (S.ended) return;
+  const mb = S.members.get(from);
+  if (mb) mb.lastSeen = Date.now();
+  else if (o.t !== 'hello' && o.t !== 'leave' && o.t !== 'end') {
+    // participante que ainda não se apresentou (perdemos o hello): pede apresentação
+    announce(false);
+  }
   switch (o.t) {
     case 'hello': {
-      if (!o.re) sendJSON({ t: 'hello', v: 1, re: 1, name: S.me.name, color: S.me.color, role: S.role });   // responde 1x: o lado que reabriu precisa do nosso hello
-      S.peerProfile = { name: String(o.name || 'Anônimo').slice(0, 24), color: Math.abs(Number(o.color) || 0) % AV.length };
-      renderPeer();
-      const first = !S.connected;
-      S.connected = true; S.wasConnected = true; S.keyFails = 0; S.peerPresence = 'online'; S.lastContact = Date.now(); renderQuality();
-      clearTimeout(S.retryTimer); clearTimeout(S.dialTimeout);
-      setStatus('online');
-      if (!S.greeted) {
-        S.greeted = true;
-        pushMessage(sysMsg('Conexão direta estabelecida. Criptografia ponta a ponta ativa (AES-256-GCM).'));
-      } else if (first) pushMessage(sysMsg('Reconectado.', 'info'));
-      if (first) { sound('connect'); fogDissipate(); }
-      flushReads(); saveSoon();
+      // quem saiu há menos de 1 min e voltou (F5, rede caiu) não gera outro "entrou"
+      const m = mb || { id: from, typing: false, typingTimer: 0, shown: Date.now() - (S.gone.get(from) || 0) < 60000 };
+      const prevName = m.name;
+      m.name = String(o.name || 'Anônimo').slice(0, 24).trim() || 'Anônimo';
+      m.color = Math.abs(Number(o.color) || 0) % AV.length;
+      m.role = o.role === 'host' ? 'host' : 'guest';
+      m.joinedAt = Number(o.joinedAt) || Date.now();
+      m.adm = !!o.adm;
+      m.presence = ['online', 'away'].includes(o.presence) ? o.presence : 'online';
+      m.ln = Number(o.ln) || 0;
+      m.lastSeen = Date.now();
+      S.members.set(from, m);
+      if (!o.re) setTimeout(() => announce(true), 120 + Math.random() * 700);   // responde quem chegou
+      if (m.adm && !m.shown) {
+        m.shown = true;
+        if (S.admitted) {
+          pushMessage(sysMsg(m.name + ' entrou na conversa.', 'info'));
+          sound('connect');
+          if (S.view === 'waiting') { showView('chat'); fogDissipate(); }
+        }
+      } else if (prevName && prevName !== m.name && m.shown) saveSoon();
+      renderMembers(); refreshStatus();
       break;
     }
-    case 'profile':
-      if (S.peerProfile) {
-        const n = String(o.name || '').slice(0, 24).trim();
-        if (n) { S.peerProfile.name = n; renderPeer(); saveSoon(); }
-      }
-      break;
+    case 'leave': if (mb) removeMember(from, !o.final); break;   // final = clicou em Sair (aviso na hora); sem final pode ser só F5
     case 'msg': {
+      const id = String(o.id || '').slice(0, 32);
+      if (!id || S.msgIndex.has(id)) break;
       const text = typeof o.text === 'string' ? o.text.slice(0, MAX_TEXT) : '';
       if (!text.trim()) break;
-      const m = { id: String(o.id || uid()).slice(0, 32), kind: 'text', dir: 'in', ts: Number(o.ts) || Date.now(), text, status: 'delivered', reactions: {} };
+      const m = { id, kind: 'text', dir: 'in', from, fromName: memberName(from), fromColor: mb ? mb.color : 0,
+        ts: Number(o.ts) || Date.now(), text, status: 'delivered', reactions: {} };
       if (o.replyTo) m.replyTo = String(o.replyTo).slice(0, 32);
+      if (mb) { clearTimeout(mb.typingTimer); mb.typing = false; refreshStatus(); }
       pushMessage(m);
       sendJSON({ t: 'ack', id: m.id });
       maybeRead(m); sound('recv'); bumpUnread();
@@ -723,33 +673,40 @@ function handle(o){
     }
     case 'read': {
       let ch = false;
-      (Array.isArray(o.ids) ? o.ids : []).forEach(id => {
+      (Array.isArray(o.ids) ? o.ids.slice(0, 500) : []).forEach(id => {
         const m = S.msgIndex.get(String(id));
-        if (m && m.dir === 'out' && m.status !== 'read') { m.status = 'read'; updateMsg(m); ch = true; }
+        if (!m || m.dir !== 'out' || m.status === 'read') return;
+        m.readBy = m.readBy || [];
+        if (!m.readBy.includes(from)) m.readBy.push(from);
+        // "lida" (azul) quando todos que estão na conversa leram
+        const others = admittedMembers().map(x => x.id);
+        const st = others.length && others.every(x => m.readBy.includes(x)) ? 'read' : 'delivered';
+        if (m.status !== st) { m.status = st; updateMsg(m); ch = true; }
       });
       if (ch) saveSoon();
       break;
     }
-    case 'typing': showTyping(!!o.on); break;
-    case 'file': onFileMeta(o); break;
+    case 'typing': {
+      if (!mb) break;
+      clearTimeout(mb.typingTimer);
+      mb.typing = !!o.on;
+      if (mb.typing) mb.typingTimer = setTimeout(() => { mb.typing = false; refreshStatus(); }, 3500);
+      refreshStatus();
+      break;
+    }
+    case 'file': onFileMeta(o, from); break;
     case 'file-done': {
       const m = S.msgIndex.get(String(o.id));
-      if (m && m.dir === 'out') { m.status = 'delivered'; updateMsg(m); saveSoon(); }
+      if (m && m.dir === 'out' && m.status === 'sent') { m.status = 'delivered'; updateMsg(m); saveSoon(); }
       break;
     }
     case 'file-cancel': {
       const m = S.msgIndex.get(String(o.id));
-      if (m && m.kind === 'file' && m.status === 'receiving') {
+      if (m && m.kind === 'file' && m.from === from && m.status === 'receiving') {
         const tr = S.transfersIn.get(m.tid);
         if (tr) { clearTimeout(tr.timer); S.transfersIn.delete(m.tid); }
         m.status = 'canceled'; updateMsg(m); saveSoon();
       }
-      break;
-    }
-    case 'ping': S.lastContact = Date.now(); sendJSON({ t: 'pong', ts: o.ts }); break;
-    case 'pong': {
-      const r = Date.now() - Number(o.ts || Date.now());
-      if (r >= 0 && r < 30000) { S.rtt = Math.max(1, r); S.lastContact = Date.now(); renderLatency(); renderQuality(); }
       break;
     }
     case 'react': {
@@ -757,24 +714,24 @@ function handle(o){
       if (!m || m.kind === 'sys') break;
       const e = String(o.emoji || '').slice(0, 8);
       if (!REACTIONS.includes(e)) break;
-      m.reactions = m.reactions || {};
-      m.reactions[e] = m.reactions[e] || { me: false, peer: false };
-      m.reactions[e].peer = !!o.on;
-      if (!m.reactions[e].me && !m.reactions[e].peer) delete m.reactions[e];
+      setReaction(m, e, from, !!o.on);
       updateMsg(m); saveSoon();
       break;
     }
     case 'edit': {
       const m = S.msgIndex.get(String(o.id));
-      if (!m || m.kind !== 'text') break;
+      if (!m || m.kind !== 'text' || m.from !== from) break;      // só o autor edita
       const text = typeof o.text === 'string' ? o.text.slice(0, MAX_TEXT) : '';
       if (!text.trim()) break;
       m.text = text; m.edited = true; updateMsg(m); saveSoon();
       break;
     }
-    case 'del': {
+    case 'del': {                                                  // qualquer participante pode apagar
       const m = S.msgIndex.get(String(o.id));
-      if (m) removeMessageLocal(m);
+      if (m && m.kind !== 'sys') {
+        removeMessageLocal(m);
+        if (m.from !== from) toast('info', memberName(from) + ' apagou uma mensagem.');
+      }
       break;
     }
     case 'pin': {
@@ -785,16 +742,29 @@ function handle(o){
       break;
     }
     case 'presence': {
-      S.peerPresence = ['online','away','reconnecting'].includes(o.state) ? o.state : 'online';
-      refreshStatus();
+      if (!mb) break;
+      mb.presence = o.state === 'away' ? 'away' : 'online';
+      renderMembers();
       break;
     }
-    case 'bye': wipe('peer'); break;
-    case 'full':
-      if (S.wasConnected) { try { if (S.conn) S.conn.close(); } catch {} }  // corrida de reconexão: tenta de novo
-      else wipe('full');
+    case 'profile': {
+      if (!mb) break;
+      const n = String(o.name || '').slice(0, 24).trim();
+      if (n) { mb.name = n; renderMembers(); refreshStatus(); }
       break;
+    }
+    case 'end': verifyEnd(o, from); break;                         // só o anfitrião encerra
   }
+}
+async function verifyEnd(o, from){
+  let ok = false;
+  if (S.hostTag) {
+    try {
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', ub64(String(o.secret || ''))));
+      ok = b64u(d.slice(0, 16)) === S.hostTag;
+    } catch { ok = false; }
+  } else { const mb = S.members.get(from); ok = !!(mb && mb.role === 'host'); }   // links antigos, sem prova
+  if (ok && !S.ended) wipe('host-ended');
 }
 
 /* ───────── mensagens / render ───────── */
@@ -840,17 +810,33 @@ function fileCard(m){
 function quoteBlock(m){
   if (!m.replyTo) return '';
   const q = S.msgIndex.get(m.replyTo);
-  const name = q ? (q.dir === 'out' ? S.me.name : (S.peerProfile ? S.peerProfile.name : 'Anônimo')) : 'Mensagem';
+  const name = q ? (q.dir === 'out' ? 'Você' : (q.fromName || 'Anônimo')) : 'Mensagem';
   const text = q ? (q.kind === 'text' ? q.text : (q.name || 'Arquivo')) : 'Mensagem apagada';
   return `<div class="quote-block" data-action="jump" data-id="${esc(m.replyTo)}"><div class="q-name">${esc(name)}</div><div class="q-text">${esc(text)}</div></div>`;
 }
+// reações: emoji -> lista de ids de quem reagiu
+function normReactions(m){
+  const r = m.reactions || {};
+  Object.keys(r).forEach(e => {
+    if (Array.isArray(r[e])) return;
+    const a = []; if (r[e] && r[e].me && S.myId) a.push(S.myId); if (r[e] && r[e].peer) a.push('antigo');
+    if (a.length) r[e] = a; else delete r[e];
+  });
+  m.reactions = r;
+}
+function setReaction(m, e, who, on){
+  normReactions(m);
+  const a = (m.reactions[e] || []).filter(x => x !== who);
+  if (on) a.push(who);
+  if (a.length) m.reactions[e] = a; else delete m.reactions[e];
+}
 function reactionsRow(m){
   const r = m.reactions || {};
-  const keys = Object.keys(r).filter(e => r[e].me || r[e].peer);
+  const keys = Object.keys(r).filter(e => Array.isArray(r[e]) && r[e].length);
   if (!keys.length) return '';
   return `<div class="reactions">` + keys.map(e => {
-    const n = (r[e].me ? 1 : 0) + (r[e].peer ? 1 : 0);
-    return `<button class="reaction-chip${r[e].me ? ' mine' : ''}" data-action="react-toggle" data-id="${m.id}" data-emoji="${esc(e)}">${e}<span class="rc-n">${n}</span></button>`;
+    const mine = r[e].includes(S.myId);
+    return `<button class="reaction-chip${mine ? ' mine' : ''}" data-action="react-toggle" data-id="${m.id}" data-emoji="${esc(e)}">${e}<span class="rc-n">${r[e].length}</span></button>`;
   }).join('') + `</div>`;
 }
 function msgTools(m){
@@ -863,7 +849,15 @@ function msgTools(m){
     `<button data-action="delete" data-id="${m.id}" title="Apagar" aria-label="Apagar">${ICONS.trash}</button>` +
     `</div>`;
 }
+function senderTag(m){
+  if (m.dir !== 'in') return '';
+  const c = AV[(m.fromColor || 0) % AV.length];
+  return `<div class="sender" style="color:${c[0]}">${esc(m.fromName || 'Anônimo')}</div>`;
+}
 function bubbleInner(m){
+  return senderTag(m) + bubbleBody(m);
+}
+function bubbleBody(m){
   if (m.kind === 'text') return quoteBlock(m) + `<div class="txt">${richText(m.text)}</div>${metaRow(m)}${reactionsRow(m)}`;
   const isImg = (m.mime || '').startsWith('image/');
   const isAudio = (m.mime || '').startsWith('audio/');
@@ -887,7 +881,7 @@ function buildMsg(m){
   if (m.dir === 'in') {
     const av = document.createElement('span');
     av.className = 'avatar';
-    setAvatar(av, S.peerProfile);
+    setAvatar(av, { name: m.fromName || '?', color: m.fromColor || 0 });
     node.appendChild(av);
   }
   const b = document.createElement('div');
@@ -979,22 +973,27 @@ function armTransferTimeout(tid){
     }
   }, 30000);
 }
-function onFileMeta(o){
+function onFileMeta(o, from){
   const size = Number(o.size), total = Number(o.total);
   const tid = String(o.tid || '');
-  if (!(size > 0 && size <= MAX_FILE) || total !== Math.ceil(size / CHUNK) || !/^[0-9a-f]{32}$/.test(tid) || S.transfersIn.has(tid)) return;
-  const m = {
-    id: String(o.id || uid()).slice(0, 32), kind: 'file', dir: 'in', ts: Number(o.ts) || Date.now(),
+  const id = String(o.id || '').slice(0, 32);
+  if (!id || !(size > 0 && size <= MAX_FILE) || total !== Math.ceil(size / CHUNK) || !/^[0-9a-f]{32}$/.test(tid) || S.transfersIn.has(tid)) return;
+  const old = S.msgIndex.get(id);
+  if (old && !(old.from === from && ['failed', 'canceled'].includes(old.status))) return;   // reenvio do autor reaproveita o card
+  const mb = S.members.get(from);
+  const m = old || {
+    id, kind: 'file', dir: 'in', ts: Number(o.ts) || Date.now(), from, fromName: memberName(from), fromColor: mb ? mb.color : 0,
     name: String(o.name || 'arquivo').slice(0, 120), size, mime: String(o.mime || 'application/octet-stream').slice(0, 100),
     total, tid, status: 'receiving', progress: 0, bytes: 0
   };
-  S.transfersIn.set(tid, { id: m.id, total, received: 0, bytes: 0, parts: new Array(total), timer: 0 });
+  m.tid = tid; m.total = total; m.status = 'receiving'; m.progress = 0; m.bytes = 0;
+  S.transfersIn.set(tid, { id: m.id, from, total, received: 0, bytes: 0, parts: new Array(total), timer: 0 });
   armTransferTimeout(tid);
-  pushMessage(m);
+  if (old) updateMsg(m); else pushMessage(m);
 }
-function onChunk(tid, idx, data){
+function onChunk(tid, idx, data, from){
   const tr = S.transfersIn.get(tid);
-  if (!tr || idx >= tr.total || tr.parts[idx]) return;
+  if (!tr || tr.from !== from || idx >= tr.total || tr.parts[idx]) return;
   tr.parts[idx] = data; tr.received++; tr.bytes += data.length;
   const m = S.msgIndex.get(tr.id);
   if (!m) { clearTimeout(tr.timer); S.transfersIn.delete(tid); return; }
@@ -1013,14 +1012,10 @@ function onChunk(tid, idx, data){
   }
 }
 async function waitBuffer(){
-  const c = S.conn;
-  if (c && c.relay) {                                    // relay público: ritmo menor para não ser limitado
-    await sleep(30);
-    while (S.conn === c && c.bufferedAmount > 262144 && S.connected && !S.ended) await sleep(40);
-    return;
-  }
-  const dc = c && c.dataChannel;
-  while (dc && dc.bufferedAmount > 4 * 1048576 && S.connected && !S.ended) await sleep(25);
+  // relay público: ritmo moderado para não ser limitado pelos brokers
+  await sleep(30);
+  const busy = () => coverLinks().some(l => l.ws && l.ws.bufferedAmount > 262144);
+  while (busy() && S.connected && !S.ended) await sleep(40);
 }
 function queueFile(file, existing){
   S.outQueue.push({ file, m: existing || null });
@@ -1068,7 +1063,7 @@ async function sendFile(file, m){
       const f = await makeFrame(2, plain);
       await waitBuffer();
       if (S.ended || ctl.canceled || !S.connected) throw new Error('abort');
-      S.conn.send(f.buffer);
+      if (!netSend(f, { cover: true })) throw new Error('offline');
       m.progress = (i + 1) / total;
       if (i % 4 === 3 || i === total - 1) updateProgress(m);
     }
@@ -1137,7 +1132,8 @@ async function sendText(){
 }
 
 /* ───────── convite / QR ───────── */
-const inviteLink = () => location.href.split('#')[0] + '#r=' + S.roomId + '&k=' + S.keyB64 + (S.saltB64 ? '&s=' + S.saltB64 : '');
+const hashStr = () => '#r=' + S.roomId + '&k=' + S.keyB64 + (S.saltB64 ? '&s=' + S.saltB64 : '') + (S.hostTag ? '&h=' + S.hostTag : '');
+const inviteLink = () => location.href.split('#')[0] + hashStr();
 function renderInvite(){
   const l = inviteLink();
   ['#invite-link', '#invite-link-side'].forEach(s => { const e = $(s); e.textContent = l; e.title = l; });
@@ -1181,15 +1177,15 @@ async function copyLink(auto = false){
     note.classList.toggle('manual', !ok);
     note.innerHTML = ok
       ? ICONS.check1 + '<span>Link copiado automaticamente. Cole no WhatsApp, SMS ou onde preferir.</span>'
-      : ICONS.alert + '<span>Toque em <b>Copiar</b> e envie o link para a outra pessoa.</span>';
+      : ICONS.alert + '<span>Toque em <b>Copiar</b> e envie o link para quem vai participar (até ' + (MAX_MEMBERS - 1) + ' pessoas).</span>';
   }
-  if (ok) toast('ok', auto ? 'Link copiado automaticamente. Envie para a outra pessoa.' : 'Link copiado.');
+  if (ok) toast('ok', auto ? 'Link copiado automaticamente. Envie para quem vai participar.' : 'Link copiado.');
   else if (!auto) toast('error', 'Não foi possível copiar — selecione o link manualmente.');
   return ok;
 }
 async function shareLink(){
   if (navigator.share) {
-    try { await navigator.share({ title: 'Névoa', text: 'Entre na minha conversa privada (anônima e criptografada):', url: inviteLink() }); return; }
+    try { await navigator.share({ title: 'Névoa', text: 'Entre na nossa conversa privada (anônima e criptografada):', url: inviteLink() }); return; }
     catch (e) { if (e && e.name === 'AbortError') return; }
   }
   copyLink();
@@ -1198,12 +1194,12 @@ async function shareLink(){
 /* ───────── compartilhamento fácil / entrada por convite ───────── */
 function shareTo(kind){
   const l = inviteLink();
-  const text = 'Entre na minha conversa privada no Névoa (anônima, criptografada e sem cadastro):';
+  const text = 'Entre na nossa conversa privada no Névoa (anônima, criptografada e sem cadastro):';
   const url = kind === 'whatsapp'
     ? 'https://wa.me/?text=' + encodeURIComponent(text + '\n' + l)
     : 'https://t.me/share/url?url=' + encodeURIComponent(l) + '&text=' + encodeURIComponent(text);
   window.open(url, '_blank', 'noopener,noreferrer');
-  toast('info', 'Compartilhamento aberto. Envie o link para uma pessoa.');
+  toast('info', 'Compartilhamento aberto. Envie o link para o grupo.');
 }
 function extractInvite(text){
   const t = String(text || '').trim();
@@ -1216,8 +1212,8 @@ function extractInvite(text){
     const i = c.indexOf('#');
     const hash = (i >= 0 ? c.slice(i + 1) : c).replace(/^[?#]/, '');
     const p = new URLSearchParams(hash);
-    const r = p.get('r'), k = p.get('k'), s = p.get('s');
-    if (validHash({ r, k, s })) return { r, k, s };
+    const r = p.get('r'), k = p.get('k'), s = p.get('s'), h = p.get('h');
+    if (validHash({ r, k, s, h })) return { r, k, s, h };
   }
   return null;
 }
@@ -1236,39 +1232,37 @@ function goJoin(){
     return;
   }
   $('#modal-join').hidden = true;
-  history.replaceState(null, '', location.href.split('#')[0] + '#r=' + inv.r + '&k=' + inv.k);
+  history.replaceState(null, '', location.href.split('#')[0] + '#r=' + inv.r + '&k=' + inv.k + (inv.s ? '&s=' + inv.s : '') + (inv.h ? '&h=' + inv.h : ''));
   location.reload();
 }
 function refreshConnHelp(){
   const box = $('#conn-help');
   if (!box) return;
-  const show = S.view === 'chat' && !S.connected && (S.role === 'guest' || S.wasConnected);
+  const show = S.view === 'chat' && !S.connected && !S.ended && S.roomId;
   box.hidden = !show;
   if (!show) return;
   const T = $('#conn-help-title'), P = $('#conn-help-text');
-  if (S.role === 'host'){
-    T.textContent = 'Aguardando a outra pessoa voltar';
-    P.textContent = 'A conexão caiu. Estamos tentando restabelecer automaticamente.';
-  } else if (S.netState === 'host-offline'){
-    T.textContent = 'O anfitrião ainda não está online';
-    P.textContent = 'Peça para a pessoa abrir o site e manter a aba aberta. Tentamos conectar sozinhos.';
-  } else if (S.netState === 'signal'){
-    T.textContent = 'Reconectando ao serviço de encontro';
-    P.textContent = 'Isso costuma levar poucos segundos. Você não precisa fazer nada.';
+  if (S.linkUp) {
+    T.textContent = 'Entrando na sala…';
+    P.textContent = 'Verificando quem já está na conversa. Leva só alguns segundos.';
+  } else if (S.wasConnected) {
+    T.textContent = 'Reconectando…';
+    P.textContent = 'A internet oscilou. Voltamos sozinhos assim que ela voltar.';
   } else {
     T.textContent = 'Conectando automaticamente…';
-    P.textContent = 'Estamos localizando o outro navegador. Mantenha esta aba aberta.';
+    P.textContent = 'Abrindo o canal cifrado da sala. Mantenha esta aba aberta.';
   }
 }
 
 /* ───────── encerrar / limpar ───────── */
 function cleanupTimers(){
-  ['retryTimer','dialTimeout','typingStop','typingHide','saveTimer'].forEach(k => { clearTimeout(S[k]); S[k] = 0; });
-  clearInterval(S.pingTimer); S.pingTimer = 0;
+  ['typingStop','saveTimer'].forEach(k => { clearTimeout(S[k]); S[k] = 0; });
 }
 function resetSession(){
   S.ended = false; S.roomId = null; S.keyB64 = null; S.role = null;
   S.greeted = false; S.wasConnected = false; S.keyFails = 0; S.netState = 'idle';
+  S.admitted = false; S.admitAt = 0; S.linkUp = false; S.myId = null; S.myIdBytes = null; S.joinedAt = 0;
+  S.hostTag = null; S.hostSecret = null; S.disconnects = 0;
   S.me = genMe(); renderMe();
   S.replyTo = null; S.editingId = null; S.pinnedId = null; S.searchQuery = '';
 }
@@ -1277,13 +1271,13 @@ function wipe(reason){
   S.ended = true;
   cleanupTimers();
   S.transfersIn.forEach(tr => clearTimeout(tr.timer));
-  try { if (S.conn) S.conn.close(); } catch {}
   relayStop();
-  try { if (S.peer) S.peer.destroy(); } catch {}
-  S.conn = null; S.peer = null; S.connected = false; S.peerTyping = false;
+  S.connected = false;
+  S.members.forEach(m => clearTimeout(m.typingTimer)); S.members.clear();
+  S.seen.clear(); S.mySent.clear(); S.sentAt.clear(); S.gone.clear(); S.leaveFrame = null;
   S.messages.forEach(m => { if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch {} } });
   try { localStorage.removeItem(skey()); } catch {}
-  try { sessionStorage.removeItem(rkey()); } catch {}
+  try { sessionStorage.removeItem(rkey()); sessionStorage.removeItem(idKey()); } catch {}
   S.messages = []; S.msgIndex.clear(); S.msgNodes.clear();
   S.transfersIn.clear(); S.transfersOut.clear(); S.outFiles.clear();
   S.outQueue = []; S.outBusy = false; S.pendingReads = [];
@@ -1291,19 +1285,19 @@ function wipe(reason){
   stopRecording();
   $('#reply-bar').hidden = true; $('#pinned-banner').hidden = true; $('#search-bar').hidden = true;
   closeReactPop(); if (delModal) delModal.hidden = true;
-  S.cryptoKey = null; S.peerProfile = null;
+  S.cryptoKey = null;
   S.lastDay = ''; S.pillN = 0; S.unread = 0; S.rtt = 0;
   msgList.innerHTML = ''; emptyState.hidden = false; hidePill();
   closeLightbox(); closeSidebar();
   ['#qr-waiting','#qr-side'].forEach(s => { const c = $(s); const x = c.getContext('2d'); if (x) x.clearRect(0, 0, c.width, c.height); });
   history.replaceState(null, '', location.pathname + location.search);
   document.title = BASE_TITLE;
-  renderPeer();
   if (reason === 'cancel') { resetSession(); showView('landing'); return; }
   const T = $('#ended-title'), P = $('#ended-text');
-  if (reason === 'peer') { T.textContent = 'A outra pessoa encerrou'; P.textContent = 'A conversa foi encerrada pelo outro participante. Mensagens, arquivos e a chave de criptografia foram apagados deste dispositivo. Nenhum registro ficou em servidores.'; }
-  else if (reason === 'full') { T.textContent = 'Sala cheia'; P.textContent = 'Esta conversa é privada e cabe apenas duas pessoas. Nada foi guardado neste dispositivo.'; }
-  else { T.textContent = 'Conversa encerrada'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados dos dois navegadores. Não há como recuperar — nenhum registro ficou em servidores.'; }
+  if (reason === 'host-ended') { T.textContent = 'O anfitrião encerrou a conversa'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados deste dispositivo. Nenhum registro ficou em servidores.'; }
+  else if (reason === 'left') { T.textContent = 'Você saiu da conversa'; P.textContent = 'As mensagens, os arquivos e a chave foram apagados deste dispositivo. Os outros participantes continuam conversando.'; }
+  else if (reason === 'full') { T.textContent = 'Sala cheia'; P.textContent = 'Esta conversa já tem ' + MAX_MEMBERS + ' pessoas, o máximo permitido. Nada foi guardado neste dispositivo.'; }
+  else { T.textContent = 'Conversa encerrada'; P.textContent = 'Mensagens, arquivos e a chave de criptografia foram apagados de todos os aparelhos. Não há como recuperar — nenhum registro ficou em servidores.'; }
   showView('ended');
   if (reason !== 'full') sound('end');
 }
@@ -1317,10 +1311,17 @@ function openConfirm(title, text, okLabel, onOk){
   $('#btn-confirm-cancel').focus();
 }
 function confirmEnd(){
-  openConfirm('Encerrar e apagar tudo?',
-    'Mensagens, arquivos e a chave de criptografia serão removidos dos dois navegadores, agora. Não há como recuperar.',
-    'Encerrar e apagar',
-    async () => { await sendJSON({ t: 'bye' }); setTimeout(() => wipe('me'), 150); });
+  if (S.role === 'host') {
+    openConfirm('Encerrar para todos?',
+      'Mensagens, arquivos e a chave de criptografia serão apagados de todos os aparelhos (até ' + MAX_MEMBERS + ' pessoas), agora. Não há como recuperar.',
+      'Encerrar para todos',
+      async () => { await sendJSON({ t: 'end', secret: S.hostSecret ? b64u(S.hostSecret) : '' }); setTimeout(() => wipe('me'), 200); });
+  } else {
+    openConfirm('Sair da conversa?',
+      'As mensagens e arquivos serão apagados deste aparelho. Os outros continuam conversando. Só o anfitrião pode encerrar para todos.',
+      'Sair da conversa',
+      async () => { await sendJSON({ t: 'leave', final: 1 }); setTimeout(() => wipe('left'), 200); });
+  }
 }
 
 /* ───────── lightbox / sidebar / emoji ───────── */
@@ -1349,9 +1350,10 @@ function buildEmoji(){
 }
 
 /* ───────── criar / entrar ───────── */
-const readHash = () => { const p = new URLSearchParams(location.hash.replace(/^#/, '')); return { r: p.get('r'), k: p.get('k'), s: p.get('s') }; };
+const readHash = () => { const p = new URLSearchParams(location.hash.replace(/^#/, '')); return { r: p.get('r'), k: p.get('k'), s: p.get('s'), h: p.get('h') }; };
 const validHash = h => {
   if (!/^[0-9a-f]{24}$/.test(h.r || '')) return false;
+  if (h.h && !/^[A-Za-z0-9_-]{22}$/.test(h.h)) return false;
   const k = h.k || '';
   if (h.s) return /^[A-Za-z0-9_-]{80}$/.test(k) && /^[A-Za-z0-9_-]{22}$/.test(h.s);
   return /^[A-Za-z0-9_-]{43}$/.test(k);
@@ -1366,17 +1368,21 @@ async function createRoom(password){
       S.keyB64 = b64u(await wrapKey(kb, password, salt)); S.saltB64 = b64u(salt); S.hasPassword = true;
     } else { S.keyB64 = b64u(kb); S.saltB64 = null; S.hasPassword = false; }
   } catch { showError('Não foi possível proteger a sala com senha.'); return; }
-  try { sessionStorage.setItem(rkey(), 'host'); } catch {}
+  // segredo do anfitrião: só ele consegue provar que pode encerrar para todos (o link leva só o hash)
+  S.hostSecret = rand(16);
+  S.hostTag = b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', S.hostSecret)).slice(0, 16));
+  try { sessionStorage.setItem(rkey(), JSON.stringify({ role: 'host', hs: b64u(S.hostSecret) })); } catch {}
   try { S.cryptoKey = await importKey(kb); } catch { showError('Não foi possível gerar a chave de criptografia.'); return; }
-  history.replaceState(null, '', '#r=' + S.roomId + '&k=' + S.keyB64 + (S.saltB64 ? '&s=' + S.saltB64 : ''));
+  history.replaceState(null, '', hashStr());
+  loadIdentity();
   await restore();
-  renderInvite(); renderMe(); renderPeer();
-  showView('waiting'); setStatus('waiting');
-  initHost(0); relayStart();
+  renderInvite(); renderMe(); renderMembers();
+  showView('waiting'); setStatus('connecting');
+  relayStart();
   copyLink(true);
 }
 async function joinRoom(h, password){
-  S.role = 'guest'; S.roomId = h.r; S.createdAt = Date.now();
+  S.role = 'guest'; S.roomId = h.r; S.createdAt = Date.now(); S.hostTag = h.h || null;
   let kb;
   if (h.s) {
     if (!password) { pendingJoin = h; pendingResume = false; $('#pass-join-error').hidden = true; $('#modal-pass-join').hidden = false; setTimeout(() => $('#pass-join-input').focus(), 50); return; }
@@ -1387,10 +1393,11 @@ async function joinRoom(h, password){
   S.keyB64 = h.k;
   try { S.cryptoKey = await importKey(kb); } catch { showError('A chave do link é inválida.'); return; }
   $('#modal-pass-join').hidden = true; pendingJoin = null;
+  loadIdentity();
   await restore();
-  renderInvite(); renderMe(); renderPeer();
+  renderInvite(); renderMe(); renderMembers();
   showView('chat'); setStatus('connecting');
-  initGuest(); relayStart();
+  relayStart();
 }
 
 /* ───────── fundo: partículas de névoa ───────── */
@@ -1459,10 +1466,7 @@ function wireEvents(){
   $('#btn-join-paste').addEventListener('click', openJoin);
   $('#btn-whatsapp').addEventListener('click', () => shareTo('whatsapp'));
   $('#btn-telegram').addEventListener('click', () => shareTo('telegram'));
-  $('#btn-retry-now').addEventListener('click', () => {
-    if (S.role === 'guest'){ toast('info', 'Tentando conectar agora…'); scheduleRetry(0); }
-    else if (S.peer && !S.peer.destroyed && S.peer.disconnected){ try { S.peer.reconnect(); } catch {} }
-  });
+  $('#btn-retry-now').addEventListener('click', () => { toast('info', 'Tentando conectar agora…'); kickLinks(); });
   $('#btn-sound').addEventListener('click', toggleSound);
   $('#btn-copy-link').addEventListener('click', copyLink);
   $('#btn-copy-side').addEventListener('click', copyLink);
@@ -1587,7 +1591,7 @@ function wireEvents(){
   const saveName = () => {
     const v = $('#name-input').value.trim().slice(0, 24);
     if (!v) { toast('warn', 'Digite um apelido.'); return; }
-    S.me.name = v; renderMe();
+    S.me.name = v; S.me.auto = false; renderMe();
     sendJSON({ t: 'profile', name: v });
     saveSoon();
     modalName.hidden = true;
@@ -1632,16 +1636,12 @@ function wireEvents(){
 
   addEventListener('focus', flushReads);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') flushReads(); });
-  addEventListener('online', () => {
-    if (S.ended || S.connected) return;
-    if (S.role === 'guest') scheduleRetry(300);
-    else if (S.peer && !S.peer.destroyed && S.peer.disconnected) { try { S.peer.reconnect(); } catch {} }
-  });
+  addEventListener('online', () => { if (!S.ended) kickLinks(); });
   addEventListener('hashchange', () => { const h = readHash(); if ((h.r || null) !== S.roomId || S.ended) location.reload(); });
 }
 
 /* ───────── Névoa+ : resposta, reações, edição, apagar, fixar, busca, voz, diagnóstico, aparência, privacidade ───────── */
-let pendingJoin = null, pendingResume = false, pendingPreview = null;
+let pendingJoin = null, pendingResume = false, pendingPreview = null, pendingHs = null;
 let reactPop = null, reactTarget = null, delModal = null, delTarget = null;
 
 async function deriveWrapKey(password, saltBytes){
@@ -1662,7 +1662,7 @@ async function unwrapKey(wrapped, password, saltBytes){
 function startReply(id){
   const m = S.msgIndex.get(id); if (!m || m.kind === 'sys') return;
   S.editingId = null; S.replyTo = id;
-  $('#reply-label').textContent = 'Respondendo a ' + (m.dir === 'out' ? 'você' : (S.peerProfile ? S.peerProfile.name : 'Anônimo'));
+  $('#reply-label').textContent = 'Respondendo a ' + (m.dir === 'out' ? 'você' : (m.fromName || 'Anônimo'));
   $('#reply-text').textContent = m.kind === 'text' ? m.text : (m.name || 'Arquivo');
   $('#reply-bar').hidden = false; input.focus();
 }
@@ -1678,11 +1678,9 @@ function cancelEdit(){ S.editingId = null; $('#reply-bar').hidden = true; }
 
 function toggleReaction(id, emoji){
   const m = S.msgIndex.get(id); if (!m || m.kind === 'sys') return;
-  m.reactions = m.reactions || {};
-  m.reactions[emoji] = m.reactions[emoji] || { me:false, peer:false };
-  const on = !m.reactions[emoji].me;
-  m.reactions[emoji].me = on;
-  if (!m.reactions[emoji].me && !m.reactions[emoji].peer) delete m.reactions[emoji];
+  normReactions(m);
+  const on = !(m.reactions[emoji] || []).includes(S.myId);
+  setReaction(m, emoji, S.myId, on);
   updateMsg(m); saveSoon();
   sendJSON({ t:'react', id, emoji, on });
 }
@@ -1719,7 +1717,10 @@ function removeMessageLocal(m){
   saveSoon();
 }
 function deleteForMe(m){ removeMessageLocal(m); toast('info', 'Mensagem apagada para você.'); }
-function deleteForEveryone(m){ sendJSON({ t:'del', id: m.id, scope:'both' }); removeMessageLocal(m); toast('info', 'Mensagem apagada para todos.'); }
+function deleteForEveryone(m){
+  if (!S.connected) { toast('warn', 'Sem conexão — não dá para apagar para todos agora.'); return; }
+  sendJSON({ t:'del', id: m.id }); removeMessageLocal(m); toast('info', 'Mensagem apagada para todos.');
+}
 function ensureDelModal(){
   if (delModal) return;
   delModal = document.createElement('div'); delModal.className = 'modal'; delModal.hidden = true;
@@ -1802,14 +1803,14 @@ async function toggleRecording(){
 function stopRecording(){ if (S.recorder && S.recorder.state === 'recording') { try { S.recorder.stop(); } catch {} } }
 
 function openDiag(){
-  const ice = S.conn && S.conn.peerConnection ? S.conn.peerConnection.iceConnectionState : '—';
   const rows = [
-    ['Papel', S.role || '—'], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
-    ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState], ['Rota', !S.connected ? '—' : (S.conn && S.conn.relay ? 'relay cifrado (' + S.conn.link.url.split('/')[2] + ')' : 'direta (P2P)')], ['ICE', ice],
-    ['Relays prontos', R.links.filter(l => l.ready).length + '/' + R.links.length],
+    ['Papel', S.role === 'host' ? 'anfitrião' : S.role === 'guest' ? 'convidado' : '—'], ['Sala', S.roomId ? S.roomId.slice(0,12) + '…' : '—'],
+    ['Conectado', S.connected ? 'sim' : 'não'], ['Estado da rede', S.netState],
+    ['Participantes', (admittedMembers().length + (S.admitted ? 1 : 0)) + ' de ' + MAX_MEMBERS],
+    ['Rota', 'relay cifrado (AES-256-GCM)'],
+    ['Relays prontos', readyLinks().length + '/' + R.links.length + (readyLinks().length ? ' · ' + readyLinks().map(l => l.url.split('/')[2].split(':')[0]).join(', ') : '')],
     ['Latência', S.rtt ? S.rtt + ' ms' : '—'], ['Quedas', String(S.disconnects)],
-    ['Senha na sala', S.hasPassword ? 'sim' : 'não'], ['Broker', PEER_OPTS.host],
-    ['STUN/TURN', PEER_OPTS.config.iceServers.map(s => Array.isArray(s.urls) ? s.urls.join(', ') : s.urls).join(' | ')]
+    ['Senha na sala', S.hasPassword ? 'sim' : 'não']
   ];
   $('#diag-grid').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
   $('#modal-diag').hidden = false;
@@ -1886,7 +1887,7 @@ function submitPassJoin(){
   $('#pass-join-input').value = '';
   const h = pendingJoin;
   if (!h) { $('#modal-pass-join').hidden = true; return; }
-  if (pendingResume) resumeHost(h, pw); else joinRoom(h, pw);
+  if (pendingResume) resumeHost(h, pw, pendingHs); else joinRoom(h, pw);
 }
 function submitPassCreate(){
   const p1 = $('#pass-create-input').value, p2 = $('#pass-create-confirm').value;
@@ -1933,8 +1934,9 @@ function jumpToMessage(id){
 }
 
 /* ───────── boot ───────── */
-async function resumeHost(h, password){
-  S.role = 'host'; S.roomId = h.r; S.createdAt = Date.now();
+async function resumeHost(h, password, hs){
+  S.role = 'host'; S.roomId = h.r; S.createdAt = Date.now(); S.hostTag = h.h || null;
+  if (hs) { try { S.hostSecret = ub64(hs); } catch {} }
   let kb;
   if (h.s) {
     if (!password) { pendingJoin = h; pendingResume = true; $('#pass-join-error').hidden = true; $('#modal-pass-join').hidden = false; setTimeout(() => $('#pass-join-input').focus(), 50); return; }
@@ -1945,13 +1947,13 @@ async function resumeHost(h, password){
   S.keyB64 = h.k;
   try { S.cryptoKey = await importKey(kb); } catch { showError('A chave do link é inválida.'); return; }
   $('#modal-pass-join').hidden = true; pendingJoin = null; pendingResume = false;
+  loadIdentity();
   await restore();
-  history.replaceState(null, '', '#r=' + S.roomId + '&k=' + S.keyB64 + (S.saltB64 ? '&s=' + S.saltB64 : ''));
-  renderInvite(); renderMe(); renderPeer();
-  const had = S.messages.length > 0;
-  showView(had ? 'chat' : 'waiting');
-  setStatus(had ? 'waitreturn' : 'waiting');
-  initHost(0); relayStart();
+  history.replaceState(null, '', hashStr());
+  renderInvite(); renderMe(); renderMembers();
+  showView(S.messages.length > 0 ? 'chat' : 'waiting');
+  setStatus('connecting');
+  relayStart();
 }
 
 async function boot(){
@@ -1965,8 +1967,6 @@ async function boot(){
     showError('Este contexto não expõe WebCrypto. Abra o site via HTTPS (ou localhost) em um navegador atualizado.');
     return;
   }
-  try { await loadLib(PEER_URLS); }
-  catch { showError('Não foi possível carregar a biblioteca de conexão (PeerJS). Verifique sua internet e recarregue.'); return; }
   loadLib(QR_URLS)
     .then(() => { S.qrLib = true; if (S.roomId) drawQRs(); })
     .catch(() => { ['#qr-card', '#qr-card-side'].forEach(s => { const e = $(s); if (e) e.hidden = true; }); });
@@ -1979,12 +1979,12 @@ async function boot(){
       showView('landing');
       return;
     }
-    let role = null;
-    try { role = sessionStorage.getItem(rkey(h.r)); } catch {}
-    if (role === 'host') await resumeHost(h);
+    let saved = null;
+    try { const raw = sessionStorage.getItem(rkey(h.r)); saved = raw === 'host' ? { role: 'host' } : JSON.parse(raw || 'null'); } catch {}
+    if (saved && saved.role === 'host') { pendingHs = saved.hs || null; await resumeHost(h, undefined, pendingHs); }
     else showInvitePreview(h);
   } else showView('landing');
 }
-addEventListener('pagehide', () => { try { if (S.conn && S.conn.relay) S.conn.close(); } catch {} });
+addEventListener('pagehide', () => { try { if (S.leaveFrame && R.on) netSend(S.leaveFrame); } catch {} });
 boot();
 })();

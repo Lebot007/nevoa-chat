@@ -575,3 +575,11 @@ body.app-mode #fx{ display:none; }
 /* cartão de demonstração mantém alinhamento de chat mesmo no hero centralizado */
 .demo-card{text-align:left}
 #input::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ───────── grupo ───────── */
+.member-count{ margin-left:6px; font:600 11px var(--font-m); color:var(--muted); background:var(--overlay); border:1px solid var(--line); border-radius:99px; padding:1px 7px; }
+.member-list{ display:flex; flex-direction:column; gap:10px; margin-top:10px; max-height:300px; overflow-y:auto; }
+.member-list .participant{ margin:0; }
+.member-empty{ font-size:12.5px; color:var(--muted); line-height:1.45; }
+.avatar-group{ background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 82%,#000),color-mix(in srgb,var(--accent) 62%,#000))!important; color:#fff; font-family:var(--font-m); font-size:13px; }
+.sender{ font-size:12px; font-weight:600; margin-bottom:2px; line-height:1.2; }
+body.theme-light .sender{ filter:brightness(.62) saturate(1.3); }
