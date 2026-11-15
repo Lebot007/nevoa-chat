@@ -1208,24 +1208,27 @@ function initFx(){
   });
   let W = 0, H = 0, parts = [], raf = 0;
   function resize(){
-    const dpr = Math.min(2, devicePixelRatio || 1);
+    const dpr = 1;   // partículas são borradas: resolução extra só custa GPU
     W = innerWidth; H = innerHeight;
     cv.width = W * dpr; cv.height = H * dpr;
     cv.style.width = W + 'px'; cv.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.min(42, Math.max(18, Math.floor(W * H / 32000)));
+    const n = Math.min(28, Math.max(12, Math.floor(W * H / 45000)));
     parts = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
       r: 20 + Math.random() * 70, s: .1 + Math.random() * .35,
       c: Math.floor(Math.random() * 3), a: .04 + Math.random() * .09, p: Math.random() * Math.PI * 2
     }));
   }
+  let last = 0;
   function loop(t){
     raf = requestAnimationFrame(loop);
-    if (document.hidden) return;
+    // ~30 fps bastam para partículas lentas; pausa fora da landing e com a aba oculta
+    if (document.hidden || S.view !== 'landing' || t - last < 33) return;
+    const dt = Math.min(3, (t - last) / 16.7); last = t;
     ctx.clearRect(0, 0, W, H);
     for (const p of parts) {
-      p.y -= p.s; p.x += Math.sin(t * .0003 + p.p) * .2;
+      p.y -= p.s * dt; p.x += Math.sin(t * .0003 + p.p) * .2 * dt;
       if (p.y < -p.r) { p.y = H + p.r; p.x = Math.random() * W; }
       ctx.globalAlpha = p.a * (.6 + .4 * Math.sin(t * .001 + p.p));
       ctx.drawImage(sprites[p.c], p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
@@ -1240,7 +1243,7 @@ function initFx(){
 function initReveal(){
   const io = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
-  }), { threshold: .15 });
+  }), { threshold: .1, rootMargin: '0px 0px -40px 0px' });
   $$('.reveal').forEach(el => io.observe(el));
   const links = $$('.top-link');
   const spy = new IntersectionObserver(es => es.forEach(e => {
