@@ -512,3 +512,33 @@ body.privacy-blurred .chat-main, body.privacy-blurred .sidebar{ filter:blur(16px
   *,*::before,*::after{ animation-duration:.001s!important; animation-iteration-count:1!important; transition-duration:.001s!important; }
   html{ scroll-behavior:auto; }
 }
+
+
+/* ═══ Névoa mobile: sem sobreposição no header/composer, alvos de toque, iOS sem zoom ═══ */
+.ch-status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-head{min-width:0}
+.composer .input-wrap{min-width:0}
+#input{font-size:16px}
+img,video,canvas{max-width:100%}
+.topbar{padding-top:env(safe-area-inset-top)}
+.icon-btn{width:40px;height:40px}
+.only-narrow{display:none}
+.more-pop{position:absolute;bottom:calc(100% + 8px);left:10px;z-index:40;display:flex;flex-direction:column;gap:4px;
+  padding:6px;border-radius:12px;background:var(--overlay);border:1px solid var(--line);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.more-pop[hidden]{display:none}
+.more-pop button{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;border:none;border-radius:9px;
+  background:transparent;color:var(--text);font:500 14px var(--font-ui);cursor:pointer;text-align:left}
+.more-pop button:hover{background:var(--surface)}
+.more-pop svg{width:18px;height:18px;color:var(--muted);flex:none}
+.rec-indicator{position:absolute;left:64px;bottom:calc(100% + 6px)}
+@media (max-width:760px){
+  .icon-btn{width:44px;height:44px}
+  .icon-btn.sm{width:40px;height:40px}
+  .chat-head{gap:6px;padding:8px 10px}
+  .chat-head .latency,.chat-head .quality-badge,#btn-sound-chat,#btn-diag{display:none}
+}
+@media (max-width:480px){
+  .composer{gap:6px;padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
+  #btn-attach,#btn-emoji,#btn-mic{display:none}
+  .only-narrow{display:inline-flex}
+}

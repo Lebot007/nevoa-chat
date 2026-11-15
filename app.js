@@ -490,7 +490,7 @@ function handle(o){
       S.peerProfile = { name: String(o.name || 'Anônimo').slice(0, 24), color: Math.abs(Number(o.color) || 0) % AV.length };
       renderPeer();
       const first = !S.connected;
-      S.connected = true; S.wasConnected = true; S.keyFails = 0; S.peerPresence = 'online'; S.lastContact = Date.now();
+      S.connected = true; S.wasConnected = true; S.keyFails = 0; S.peerPresence = 'online'; S.lastContact = Date.now(); renderQuality();
       clearTimeout(S.retryTimer); clearTimeout(S.dialTimeout);
       setStatus('online');
       if (!S.greeted) {
@@ -1280,6 +1280,12 @@ function wireEvents(){
   $('#btn-preview-cancel').addEventListener('click', () => { $('#modal-preview').hidden = true; pendingPreview = null; history.replaceState(null, '', location.pathname + location.search); showView('landing'); });
   $('#btn-reply-cancel').addEventListener('click', () => { cancelReply(); cancelEdit(); });
   $('#btn-mic').addEventListener('click', toggleRecording);
+  const morePop = $('#more-pop');
+  $('#btn-more').addEventListener('click', e => { e.stopPropagation(); morePop.hidden = !morePop.hidden; });
+  document.addEventListener('click', e => { if (!morePop.hidden && !morePop.contains(e.target) && !e.target.closest('#btn-more')) morePop.hidden = true; });
+  $('#mp-attach').addEventListener('click', () => { morePop.hidden = true; fileInput.click(); });
+  $('#mp-emoji').addEventListener('click', () => { morePop.hidden = true; emojiPop.hidden = !emojiPop.hidden; });
+  $('#mp-mic').addEventListener('click', () => { morePop.hidden = true; toggleRecording(); });
   $('#btn-search').addEventListener('click', openSearch);
   $('#btn-search-close').addEventListener('click', closeSearch);
   $('#search-input').addEventListener('input', e => applySearch(e.target.value));
@@ -1545,6 +1551,12 @@ function applySearch(q){
     if (S.searchQuery && match) hits++;
   });
   $('#search-count').textContent = S.searchQuery ? hits + ' resultado' + (hits === 1 ? '' : 's') : '';
+  let sep = null, visible = 0;
+  [...msgList.children].forEach(n => {
+    if (n.classList.contains('day-sep')) { if (sep) sep.style.display = visible ? '' : 'none'; sep = n; visible = 0; }
+    else if (n.classList.contains('msg') && !n.classList.contains('search-hidden')) visible++;
+  });
+  if (sep) sep.style.display = visible ? '' : 'none';
 }
 
 async function toggleRecording(){
@@ -1677,8 +1689,6 @@ function renderQuality(){
 function sendPresence(state){ S.presence = state; if (S.connected) sendJSON({ t:'presence', state }); }
 function initPresence(){
   document.addEventListener('visibilitychange', () => sendPresence(document.hidden ? 'away' : 'online'));
-  addEventListener('blur', () => sendPresence('away'));
-  addEventListener('focus', () => sendPresence('online'));
 }
 
 function openSplit(){
