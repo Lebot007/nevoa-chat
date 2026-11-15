@@ -49,6 +49,14 @@ node tests/e2e.mjs
 
 Sobe brokers falsos, um emulador de rede e 11 navegadores (Chrome headless): 10 participantes em 3 "casas" — fibra com P2P, 4G/CGNAT (150 ms ± 100 ms, 100 KB/s) e VPN corporativa só com a porta 443 — mais um visitante para testar a sala cheia. Verifica entrada, P2P × relay e latência, mensagens simultâneas, arquivos, queda de broker, queda de internet, troca de rede com conexão travada, limite de 10, apagar/encerrar, F5 e saída do anfitrião. Roda sozinho no GitHub Actions a cada push.
 
+Validação do site publicado, com os brokers públicos reais (precisa de internet):
+
+```bash
+node tests/live.mjs
+```
+
+Confere se o GitHub Pages está servindo exatamente o código do repositório, testa a conexão com cada broker público e abre o site publicado em 4 navegadores (entrar, conversar, arquivo, admin passando adiante e encerrar). Também roda no GitHub Actions a cada push.
+
 Em `localhost` o site aceita `?relays=ws://...,ws://...` e `?nop2p=1` para os testes; no site publicado esses parâmetros são ignorados.
 
 ## Rodar localmente (apenas desenvolvedores)

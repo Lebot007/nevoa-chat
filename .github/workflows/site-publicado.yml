@@ -1,0 +1,19 @@
+name: Site publicado (brokers reais)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # confere se o GitHub Pages publicou esta versão, testa os brokers públicos e
+      # conversa de verdade no site publicado com 4 navegadores
+      - run: node tests/live.mjs
