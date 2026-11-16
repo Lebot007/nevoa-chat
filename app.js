@@ -376,8 +376,7 @@ const RELAYS_DEFAULT = [
   { url: 'wss://mqtt.eclipseprojects.io/mqtt' },             // porta 443: passa por VPN e firewall corporativo
   { url: 'wss://demo.tbmq.io/mqtt', user: 'demo' },           // porta 443
   { url: 'wss://test.mosquitto.org:8081/mqtt' },
-  { url: 'wss://public.cloud.shiftr.io/mqtt', user: 'public', pass: 'public' },   // porta 443
-  { url: 'wss://test.mosquitto.org/mqtt' }                      // porta 443
+  { url: 'wss://public.cloud.shiftr.io/mqtt', user: 'public', pass: 'public' }    // porta 443
 ];
 // só em localhost (desenvolvimento/testes): ?relays=ws://...,ws://... e ?nop2p=1
 const IS_DEV = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
