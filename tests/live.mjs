@@ -31,14 +31,15 @@ for (const f of ['index.html', 'app.js', 'styles.css']) {
 
 // ── 2) brokers públicos reais ──
 const mqttStr = s => { const b = Buffer.from(s); return Buffer.concat([Buffer.from([b.length >> 8, b.length & 255]), b]); };
-function connectPacket(user){
-  const parts = [mqttStr('MQTT'), Buffer.from([4, user ? 0x82 : 0x02, 0, 30]), mqttStr('nvtest' + Math.random().toString(16).slice(2, 10))];
+function connectPacket(user, pass){
+  const parts = [mqttStr('MQTT'), Buffer.from([4, user ? (pass ? 0xC2 : 0x82) : 0x02, 0, 30]), mqttStr('nvtest' + Math.random().toString(16).slice(2, 10))];
   if (user) parts.push(mqttStr(user));
+  if (user && pass) parts.push(mqttStr(pass));
   const body = Buffer.concat(parts);
   return Buffer.concat([Buffer.from([0x10, body.length]), body]);
 }
 const appSrc = await readFile(join(ROOT, 'app.js'), 'utf8');
-const brokers = [...appSrc.matchAll(/\{ url: '(wss:[^']+)'(?:, user: '([^']+)')? \}/g)].map(m => ({ url: m[1], user: m[2] }));
+const brokers = [...appSrc.matchAll(/\{ url: '(wss:[^']+)'(?:, user: '([^']+)')?(?:, pass: '([^']+)')? \}/g)].map(m => ({ url: m[1], user: m[2], pass: m[3] }));
 let okBrokers = 0;
 for (const b of brokers) {
   const t0 = Date.now();
@@ -46,7 +47,7 @@ for (const b of brokers) {
     let ws; const to = setTimeout(() => { try { ws.close(); } catch {} res('sem resposta em 10 s'); }, 10000);
     try { ws = new WebSocket(b.url, 'mqtt'); } catch (e) { clearTimeout(to); return res('erro: ' + e.message); }
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => ws.send(connectPacket(b.user));
+    ws.onopen = () => ws.send(connectPacket(b.user, b.pass));
     ws.onmessage = e => { const d = new Uint8Array(e.data); clearTimeout(to); ws.close(); res(d[0] >> 4 === 2 && d[3] === 0 ? 'ok' : 'recusado (código ' + d[3] + ')'); };
     ws.onerror = () => { clearTimeout(to); res('conexão falhou'); };
   });

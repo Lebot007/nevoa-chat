@@ -15,7 +15,7 @@ const QR_URLS = [
   'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js'
 ];
 // versão do site: a mesma vai no ?v= do index.html (o navegador baixa de novo quando muda)
-const APP_VERSION = '2026.11.15-4';
+const APP_VERSION = '2026.11.16-1';
 const MAX_MEMBERS = 10;               // contando o anfitrião
 const ADMIT_WAIT = 3500;              // ao entrar, espera as apresentações antes de contar a sala
 const WIRE_V = 2;                     // versão do quadro no fio
@@ -375,7 +375,9 @@ const RELAYS_DEFAULT = [
   { url: 'wss://broker.hivemq.com:8884/mqtt' },
   { url: 'wss://mqtt.eclipseprojects.io/mqtt' },             // porta 443: passa por VPN e firewall corporativo
   { url: 'wss://demo.tbmq.io/mqtt', user: 'demo' },           // porta 443
-  { url: 'wss://test.mosquitto.org:8081/mqtt' }
+  { url: 'wss://test.mosquitto.org:8081/mqtt' },
+  { url: 'wss://public.cloud.shiftr.io/mqtt', user: 'public', pass: 'public' },   // porta 443
+  { url: 'wss://test.mosquitto.org/mqtt' }                      // porta 443
 ];
 // só em localhost (desenvolvimento/testes): ?relays=ws://...,ws://... e ?nop2p=1
 const IS_DEV = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
@@ -451,9 +453,10 @@ function relayLink(cfg, idx, gen){
     L.ct = setTimeout(() => { if (L.ws === ws && !L.ready) reset(); }, 12000);   // não ficou pronto em 12 s
     ws.onopen = () => {
       try {
-        const flags = cfg.user ? 0x82 : 0x02;            // sessão limpa (+ usuário quando o broker pede)
+        const flags = cfg.user ? (cfg.pass ? 0xC2 : 0x82) : 0x02;   // sessão limpa (+ usuário/senha quando o broker pede)
         const parts = [mqttStr('MQTT'), [4, flags, 0, 30], mqttStr('nv' + uid() + uid().slice(0, 4))];
         if (cfg.user) parts.push(mqttStr(cfg.user));
+        if (cfg.user && cfg.pass) parts.push(mqttStr(cfg.pass));
         ws.send(mqttPacket(0x10, ...parts));
       } catch {}
       // batimento MQTT a cada 5 s; nada recebido há 13 s = conexão travada (troca de Wi-Fi/4G, celular dormiu).

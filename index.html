@@ -12,8 +12,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=2026.11.15-4">
-<script src="app.js?v=2026.11.15-4" defer></script>
+<link rel="stylesheet" href="styles.css?v=2026.11.16-1">
+<script src="app.js?v=2026.11.16-1" defer></script>
 </head>
 <body data-view="landing">
 <noscript><div class="noscript">A Névoa precisa de JavaScript para criar a conexão criptografada entre os navegadores.</div></noscript>
@@ -171,7 +171,7 @@
       <button id="btn-diag-side" class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>Diagnóstico</button>
     </div>
     <div class="side-invite-actions">
-      <button id="btn-split" class="btn btn-ghost btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>Código e chave separados</button>
+      <button id="btn-split" class="btn btn-ghost btn-sm" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>Código e chave separados</button>
     </div>
     <button id="btn-end" class="btn btn-danger btn-block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg><span id="btn-end-label">Encerrar e apagar tudo</span></button>
   </aside>
@@ -292,7 +292,7 @@
 <div id="modal-diag" class="modal" hidden><div class="modal-card">
   <h3>Diagnóstico da conexão</h3>
   <dl class="diag-grid" id="diag-grid"></dl>
-  <p style="font-size:12px;color:var(--muted)">Se a conexão não fecha, pode ser NAT simétrico ou firewall. Um relay TURN próprio resolve — veja o README.</p>
+  <p style="font-size:12px;color:var(--muted)">Com pelo menos 1 relay pronto a conversa funciona. Se aparecer 0, a rede está bloqueando a conexão: tente outra rede (Wi-Fi ou dados móveis).</p>
   <div class="modal-actions"><button id="btn-diag-close" class="btn btn-primary">Fechar</button></div>
 </div></div>
 <div id="modal-appear" class="modal" hidden><div class="modal-card">
