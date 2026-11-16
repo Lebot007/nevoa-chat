@@ -14,6 +14,8 @@ const QR_URLS = [
   'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
   'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js'
 ];
+// versão do site: a mesma vai no ?v= do index.html (o navegador baixa de novo quando muda)
+const APP_VERSION = '2026.11.15-4';
 const MAX_MEMBERS = 10;               // contando o anfitrião
 const ADMIT_WAIT = 3500;              // ao entrar, espera as apresentações antes de contar a sala
 const WIRE_V = 2;                     // versão do quadro no fio
@@ -2223,7 +2225,7 @@ function openDiag(){
     ['P2P', p2pOn() ? 'ativado' : 'desativado'],
     ['Relays prontos', readyLinks().length + '/' + R.links.length + (readyLinks().length ? ' · ' + readyLinks().map(l => l.url.split('/')[2].split(':')[0]).join(', ') : '')],
     ['Quedas', String(S.disconnects)],
-    ['Senha na sala', S.hasPassword ? 'sim' : 'não']
+    ['Senha na sala', S.hasPassword ? 'sim' : 'não'], ['Versão do site', APP_VERSION]
   ];
   $('#diag-grid').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
   $('#modal-diag').hidden = false;

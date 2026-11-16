@@ -27,7 +27,14 @@ const M = await page(true); await M.cmd('Page.navigate', { url: link }); await s
 for (let i = 0; i < 15; i++) await say(H, 'mensagem antiga ' + i);
 await sleep(1500);
 const state = () => M.ev(`(()=>{const c=document.querySelector('.composer').getBoundingClientRect(), vv=visualViewport, last=[...document.querySelectorAll('#msg-list .msg')].pop().getBoundingClientRect(); return {comp:[Math.round(c.top),Math.round(c.bottom)], visivel:[vv.offsetTop, vv.offsetTop+vv.height], ultimaMsg:Math.round(last.bottom), compVisivel: c.top>=vv.offsetTop-1 && c.bottom<=vv.offsetTop+vv.height+1, ultimaVisivel: last.bottom<=c.top+1 && last.bottom>vv.offsetTop}})()`);
-let fails = 0; const check = (k, s) => { const ok = s.compVisivel && s.ultimaVisivel; if (!ok) fails++; console.log((ok?'✔ ':'✘ ')+k.padEnd(48), JSON.stringify(s)); };
+let fails = 0;
+{ // a versão no ?v= do index.html precisa ser a mesma do app.js (senão o navegador pode usar arquivo velho)
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(join(ROOT, 'index.html'), 'utf8'), js = readFileSync(join(ROOT, 'app.js'), 'utf8');
+  const v = (js.match(/APP_VERSION = '([^']+)'/) || [])[1];
+  const ok = !!v && html.includes('app.js?v=' + v) && html.includes('styles.css?v=' + v);
+  console.log((ok ? '✔ ' : '✘ ') + 'versão do index.html = versão do app.js'.padEnd(48), v || 'sem versão'); if (!ok) fails++;
+} const check = (k, s) => { const ok = s.compVisivel && s.ultimaVisivel; if (!ok) fails++; console.log((ok?'✔ ':'✘ ')+k.padEnd(48), JSON.stringify(s)); };
 check('sem teclado', await state());
 await M.ev(`document.querySelector('#input').focus()`);
 // Android: área visível encolhe (teclado de 336 px)
@@ -36,6 +43,12 @@ check('Android: teclado abre', await state());
 for (let i = 0; i < 4; i++) { await say(H, 'nova android ' + i); await sleep(400); }
 await sleep(1200);
 check('Android: chegam 4 mensagens com teclado aberto', await state());
+// caso do print do Galaxy S24 (Chrome): teclado aberto e a página levemente empurrada (~48 px)
+await M.ev('__kb(508, 48)'); await sleep(400);
+for (let i = 0; i < 4; i++) { await say(H, 'galaxy ' + i); await sleep(300); }
+await sleep(1200);
+check('Galaxy S24: empurrão leve + 4 mensagens', await state());
+await M.ev('__kb(508, 0)'); await sleep(300);
 // iPhone: área visível encolhe E a página é "empurrada" 336 px para cima
 await M.ev('__kb(508, 336)'); await sleep(400);
 check('iPhone: teclado abre (página empurrada)', await state());
