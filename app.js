@@ -1265,7 +1265,32 @@ function updateProgress(m){
   if (sub) sub.textContent = fileSub(m);
 }
 const nearBottom = () => msgScroll.scrollHeight - msgScroll.scrollTop - msgScroll.clientHeight < 140;
+// "grudado no fim": só deixa de acompanhar as mensagens novas quando a PESSOA rola para cima.
+// (Medir a distância na hora falha quando chegam várias seguidas: a rolagem suave ainda está a caminho.)
+let stickBottom = true, lastScrollTop = 0;
+function trackStick(){
+  const t = msgScroll.scrollTop;
+  if (nearBottom()) stickBottom = true;
+  else if (t < lastScrollTop - 4) stickBottom = false;          // subiu: está lendo mensagens antigas
+  lastScrollTop = t;
+}
+/* teclado do celular: o app ocupa exatamente a área visível. Sem isso o teclado só cobre a página
+   (iPhone, e Chrome do Android desde a versão 108): ao chegar mensagem o navegador desfaz o
+   "empurrão" que tinha dado e a barra de digitar some atrás do teclado. */
+function fitViewport(){
+  const vv = window.visualViewport;
+  if (!vv || Math.abs((vv.scale || 1) - 1) > .01) return;       // zoom com dois dedos: não mexe
+  const h = Math.round(vv.height), top = Math.max(0, Math.round(vv.offsetTop));
+  if (!h || (h === S.vvH && top === S.vvTop)) return;
+  const stick = S.view === 'chat' && stickBottom;               // estava no fim da conversa? continua no fim
+  S.vvH = h; S.vvTop = top;
+  const r = document.documentElement.style;
+  r.setProperty('--app-h', h + 'px');
+  r.setProperty('--app-top', top + 'px');
+  if (stick) requestAnimationFrame(() => { msgScroll.scrollTop = msgScroll.scrollHeight; });
+}
 function scrollToBottom(smooth){
+  stickBottom = true;
   msgScroll.scrollTo({ top: msgScroll.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   hidePill();
 }
@@ -1284,7 +1309,7 @@ function appendMessage(m, silent){
   msgList.appendChild(node);
   emptyState.hidden = true;
   if (!silent) {
-    if (m.dir === 'out' || nearBottom()) scrollToBottom(true);
+    if (m.dir === 'out' || stickBottom) scrollToBottom(true);
     else {
       S.pillN++;
       scrollPillN.textContent = S.pillN === 1 ? '1 nova mensagem' : S.pillN + ' novas mensagens';
@@ -1360,7 +1385,7 @@ function onChunk(tid, idx, data, from){
     updateMsg(m);
     sendJSON({ t: 'file-done', id: m.id });
     maybeRead(m); sound('recv'); bumpUnread(); saveSoon();
-    if (nearBottom()) scrollToBottom(true);
+    if (stickBottom) scrollToBottom(true);
   } else {
     armTransferTimeout(tid);
     if (tr.received % 4 === 0) updateProgress(m);
@@ -1940,7 +1965,14 @@ function wireEvents(){
     else if (act === 'pin') togglePin(m.id);
     else if (act === 'delete') openDeleteMenu(m);
   });
-  msgScroll.addEventListener('scroll', () => { if (nearBottom()) hidePill(); });
+  msgScroll.addEventListener('scroll', () => { trackStick(); if (nearBottom()) hidePill(); });
+  if (window.visualViewport) {
+    visualViewport.addEventListener('resize', fitViewport);
+    visualViewport.addEventListener('scroll', fitViewport);
+  }
+  addEventListener('resize', fitViewport);
+  input.addEventListener('focus', () => { fitViewport(); setTimeout(fitViewport, 120); setTimeout(fitViewport, 400); });
+  fitViewport();
   scrollPill.addEventListener('click', () => scrollToBottom(true));
 
   chatMain.addEventListener('dragenter', e => {

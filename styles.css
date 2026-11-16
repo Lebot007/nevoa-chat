@@ -19,7 +19,9 @@ body{
   color:var(--text); font:400 15px/1.5 var(--font-ui);
   -webkit-font-smoothing:antialiased; min-height:100dvh;
 }
-body.app-mode{overflow:hidden}
+/* dentro do app a página não rola: só a lista de mensagens rola. A altura vem da área realmente
+   visível (sem o teclado do celular) — ver fitViewport() no app.js */
+body.app-mode{overflow:hidden;position:fixed;inset:0}
 ::selection{background:color-mix(in srgb,var(--accent) 40%,transparent)}
 :focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:6px}
 img{max-width:100%}
@@ -63,7 +65,10 @@ h1,h2,h3{font-family:var(--font-d)}
 body.app-mode .top-links,.app-mode .brand-tag{display:none}
 
 main{position:relative;z-index:1;padding-top:var(--tb)}
-body.app-mode main{height:100dvh}
+body.app-mode main{height:var(--app-h,100dvh);transform:translateY(var(--app-top,0px))}
+body.app-mode .topbar{transform:translateY(var(--app-top,0px))}
+/* telas centralizadas (espera, encerrado, erro) rolam por dentro se não couberem */
+body.app-mode .center-view.active{height:100%;min-height:0;overflow-y:auto}
 .view{display:none}
 .view.active{display:block;animation:viewIn .28s var(--ease)}
 @keyframes viewIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -348,7 +353,7 @@ body.app-mode main{height:100dvh}
 /* RESPONSIVO */
 @media (max-width:960px){
   .chat-shell.active{grid-template-columns:1fr}
-  .sidebar{position:fixed;left:0;top:var(--tb);bottom:0;z-index:60;width:min(320px,86vw);
+  .sidebar{position:fixed;left:0;top:calc(var(--tb) + var(--app-top,0px));height:calc(var(--app-h,100dvh) - var(--tb));bottom:auto;z-index:60;width:min(320px,86vw);
     transform:translateX(-105%);transition:transform .25s var(--ease);box-shadow:30px 0 80px -20px rgba(0,0,0,.7)}
   .sidebar.open{transform:none}
   .only-mobile{display:inline-flex!important}

@@ -17,3 +17,5 @@ jobs:
           node-version: 22
       # 10 navegadores em 3 redes emuladas (fibra com P2P, 4G/CGNAT, VPN só 443) + visitante
       - run: node tests/e2e.mjs
+      # teclado do celular: barra de digitar sempre visível quando chegam mensagens
+      - run: node tests/teclado.mjs

@@ -57,6 +57,8 @@ node tests/live.mjs
 
 Confere se o GitHub Pages está servindo exatamente o código do repositório, testa a conexão com cada broker público e abre o site publicado em 4 navegadores (entrar, conversar, arquivo, admin passando adiante e encerrar). Também roda no GitHub Actions a cada push.
 
+`node tests/teclado.mjs` simula o teclado do celular (Android e iPhone) e confere que a barra de digitar não some atrás dele quando chegam mensagens.
+
 Em `localhost` o site aceita `?relays=ws://...,ws://...` e `?nop2p=1` para os testes; no site publicado esses parâmetros são ignorados.
 
 ## Rodar localmente (apenas desenvolvedores)
