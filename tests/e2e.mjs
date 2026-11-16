@@ -146,12 +146,26 @@ try {
   // 9) casa B fica 12 s sem internet
   H.b1.cut(); H.b2.cut(); H.b3.cut(); await sleep(12000);
   log('durante a queda, a casa B mostra "reconectando"', await G[1].ev(`document.querySelector('#peer-status-h').textContent`), !(await connected(G[1])));
-  H.b1.restore(); H.b2.restore(); H.b3.restore();
+  // a internet volta, mas o broker que a VPN usa continua fora para a casa B:
+  // a mensagem da casa B só chega à VPN se alguém fizer a ponte entre os brokers
+  H.b1.restore(); H.b2.restore();
   t = await until(async () => (await Promise.all(all.map(connected))).every(Boolean) && await allCount(all, 10), 30);
   log('casa B volta sozinha', t || 'não voltou', !!t);
   await say(G[1], 'voltei da queda');
   t = await until(() => allHave(all.filter(p => p !== G[1]), 'voltei da queda'), 15);
   log('mensagem depois da queda chega a todos', t || 'faltou: ' + await missing(all.filter(p => p !== G[1]), 'voltei da queda'), !!t);
+  log('  (casa B sem o broker da VPN: chegou pela ponte)', (await G[1].ev(`__nevoa.R.links[2].ready`)) ? 'broker da VPN já estava pronto' : 'sim', true);
+  H.b3.restore();
+
+  // 9b) conexão da casa B com o broker da VPN trava sem fechar (parece ativa, mas não entrega nada):
+  // a casa B ainda anuncia esse broker, então só quem olha por onde a mensagem REALMENTE chegou faz a ponte
+  await sleep(3000);
+  H.b3.freeze();
+  await say(G[4], 'com conexao meio travada');
+  t = await until(() => allHave(inH('C'), 'com conexao meio travada'), 8);
+  log('conexão travada no meio do caminho → ponte entrega à VPN', t || 'faltou: ' + await missing(inH('C'), 'com conexao meio travada'), !!t);
+  t = await until(async () => (await Promise.all(inH('B').map(connected))).every(Boolean) && await allCount(all, 10), 40);
+  log('casa B se recupera da conexão travada', t || 'não recuperou', !!t);
 
   // 10) casa C troca de rede (Wi-Fi → 4G): conexões abertas travam sem fechar
   const C = inH('C');

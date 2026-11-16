@@ -512,33 +512,30 @@ function netSend(f, opts = {}){
   return n + r > 0;
 }
 /* ponte entre brokers: se alguém só alcança brokers que o remetente não usa (ex.: VPN só com a porta 443,
-   ou um broker ainda reconectando), um participante que alcança os dois lados repassa o quadro.
-   São os mesmos bytes cifrados; quem recebe descarta cópias. Um único "repassador" por destino:
-   o de menor id entre quem ouve o remetente e alcança o destino (todos calculam igual). */
-function relayForward(f, from, viaDC, linkIdx){
+   ou um broker ainda reconectando), outro participante repassa o quadro. São os mesmos bytes cifrados;
+   quem recebe descarta cópias.
+   A decisão usa POR ONDE o quadro realmente chegou (não o que cada um anunciou, que fica desatualizado
+   logo depois de uma queda): se ele não apareceu em nenhum broker que o destinatário escuta, o primeiro
+   da fila repassa; se esse não conseguir, o próximo repassa um pouco depois, e assim por diante. */
+function relayForward(f, from, k){
   if (!S.admitted || !R.on) return;
-  const mine = linkMask();
-  if (!mine) return;
-  // brokers do remetente: o que ele anunciou + o broker por onde este quadro chegou (vale para quem acabou de chegar)
-  const snd = S.members.get(from);
-  const sMask = (snd ? (snd.ln || 0) : 0) | (linkIdx >= 0 ? 1 << linkIdx : 0);
-  const hears = x => (x.ln & sMask) !== 0;
-  const everyone = [...S.members.values()];
-  const out = new Set(), dcOut = new Set();
-  for (const m of everyone) {
-    if (m.id === from || !m.ln || (m.ln & sMask)) continue;            // já ouve o remetente pelo relay
-    if (isDirect(m.id)) { if (viaDC || !isDirect(from)) dcOut.add(m.id); continue; }
-    if (!(m.ln & mine)) continue;                                        // eu também não alcanço
-    const meHears = viaDC || (mine & sMask) !== 0;
-    if (!meHears) continue;
-    const cands = everyone.filter(x => x.adm && x.id !== from && x.id !== m.id && hears(x) && (x.ln & m.ln)).map(x => x.id);
-    cands.push(S.myId); cands.sort();
-    if (cands[0] !== S.myId) continue;                                   // outro participante repassa
-    const l = R.links.find(x => x.ready && (m.ln & (1 << x.idx)));
-    if (l) out.add(l);
-  }
-  out.forEach(l => l.pub(f));
-  dcOut.forEach(id => { const p = S.peers.get(id); try { if (p && p.dc && p.dc.readyState === 'open') p.dc.send(f); } catch {} });
+  const targets = [...S.members.values()].filter(m => m.id !== from && m.ln);
+  if (!targets.length) return;
+  const order = [...admittedMembers().map(x => x.id), S.myId].filter(id => id !== from).sort();
+  const rank = Math.max(0, order.indexOf(S.myId));
+  setTimeout(() => {
+    if (!R.on || S.ended || !S.admitted) return;
+    const seenMask = S.seen.get(k) || 0;
+    const out = new Set(), dc = new Set();
+    for (const m of targets) {
+      if (!S.members.has(m.id) || (m.ln & seenMask)) continue;   // já está num broker que ele escuta
+      if (isDirect(m.id)) { dc.add(m.id); continue; }
+      const l = R.links.find(x => x.ready && (m.ln & (1 << x.idx)));
+      if (l) out.add(l);
+    }
+    out.forEach(l => { if (l.pub(f)) S.seen.set(k, (S.seen.get(k) || 0) | (1 << l.idx)); });
+    dc.forEach(id => { const p = S.peers.get(id); try { if (p && p.dc && p.dc.readyState === 'open') p.dc.send(f); } catch {} });
+  }, 300 + rank * 150 + Math.random() * 60);
 }
 function trimMap(m, max){ if (m.size <= max) return; const it = m.keys(); while (m.size > max * .8) m.delete(it.next().value); }
 
@@ -548,8 +545,12 @@ function wireRecv(d, viaDC, linkIdx){ wireQ = wireQ.then(() => onWire(d, viaDC, 
 async function onWire(f, viaDC, linkIdx){
   if (S.ended || !S.cryptoKey || !S.myId || f.length < 22 || f[0] !== WIRE_V) return;
   const from = hex(f.subarray(1, 9)), k = hex(f.subarray(9, 21));
-  if (S.seen.has(k)) return;                             // mesma mensagem por outro broker
-  S.seen.set(k, 1); trimMap(S.seen, 6000);
+  const bit = linkIdx >= 0 ? 1 << linkIdx : 0;
+  if (S.seen.has(k)) {                                    // mesma mensagem por outro broker: só anota por onde chegou
+    if (bit) S.seen.set(k, S.seen.get(k) | bit);
+    return;
+  }
+  S.seen.set(k, bit); trimMap(S.seen, 6000);
   if (from === S.myId) {
     if (S.mySent.has(k)) {                               // eco do que eu mesmo mandei: mede a latência
       const t0 = S.sentAt.get(k);
@@ -563,7 +564,7 @@ async function onWire(f, viaDC, linkIdx){
   try { pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: f.slice(9, 21), additionalData: f.slice(0, 9) }, S.cryptoKey, f.slice(21))); }
   catch { keyFail(); return; }
   if (S.ended || pt.length < 1) return;
-  relayForward(f, from, viaDC, linkIdx);                 // só quadros autênticos são repassados
+  relayForward(f, from, k);                              // só quadros autênticos são repassados
   if (pt[0] === 1) {
     let o; try { o = JSON.parse(td.decode(pt.subarray(1))); } catch { return; }
     if (o && typeof o.t === 'string') handle(o, from);
